@@ -1,8 +1,14 @@
-# ESPHome AC component for Hisense CITY DC Inverter, (AS-13UW4RYRCM04G/04W) (RS-485)
+# ESPHome AC component for Hisense (RS-485)
 
 ![primer](https://github.com/user-attachments/assets/1ad2cd3d-0561-4a50-bdaf-25f950640be8)
 
-This custom component provides full climate control for air conditioners manufactured by Hisense and its OEM brands (Ballu, etc.) that use the RS-485 protocol. It has been tested on **Hisense CITY DC Inverter AS-13UW4RYRCM04G/04W** and should work with many other models.
+This custom component provides full climate control for air conditioners manufactured by Hisense and its OEM brands (Ballu, etc.) that use the RS-485 protocol. It has been tested on:
+
+**Hisense CITY DC Inverter AS-13UW4RYRCM04G/04W** 
+
+**HISENSE AS-13UW4RVETG01**
+
+and should work with many other models.
 
 The component exposes a standard Home Assistant Climate entity, along with a set of optional sensors and switches to access all advanced features of the AC (turbo, eco, quiet, sleep, swing, LED, etc.).
 
