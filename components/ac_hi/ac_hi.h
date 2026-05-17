@@ -33,6 +33,16 @@ class ACHILEDTargetSwitch : public switch_::Switch {
   ACHIClimate *parent_{nullptr};
 };
 
+// Simple switch that enables/disables audible confirmation for user commands
+class ACHICommandSoundSwitch : public switch_::Switch {
+ public:
+  void set_parent(ACHIClimate *p) { parent_ = p; }
+ protected:
+  void write_state(bool state) override;
+ private:
+  ACHIClimate *parent_{nullptr};
+};
+
 // Protocol constants
 static constexpr uint8_t HI_HDR0 = 0xF4;
 static constexpr uint8_t HI_HDR1 = 0xF5;
@@ -119,6 +129,7 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   void set_pipe_sensor(void *) {}
 #endif
   void set_led_switch(ACHILEDTargetSwitch *s) { led_switch_ = s; if (led_switch_) led_switch_->set_parent(this); }
+  void set_sound_switch(ACHICommandSoundSwitch *s) { sound_switch_ = s; if (sound_switch_) sound_switch_->set_parent(this); }
 
 #ifdef USE_SENSOR
   void set_set_temperature_sensor(sensor::Sensor *s) { set_temp_sensor_ = s; }
@@ -157,8 +168,9 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   void control(const climate::ClimateCall &call) override;
   climate::ClimateTraits traits() override;
 
-  // Called by LED switch
+  // Called by LED and sound switches
   void set_desired_led(bool on);
+  void set_command_sound_enabled(bool on);
 
  protected:
   // Protocol I/O
@@ -178,6 +190,7 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   void build_tx_from_desired_();
   void publish_gated_state_();
   void update_led_switch_state_();
+  void update_sound_switch_state_();
   void maybe_force_to_target_();                     // <-- добавлено объявление
   void maybe_send_pending_control_();                // (опционально, если используется)
 
@@ -215,9 +228,17 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   bool pending_control_{false};
   uint32_t last_control_ms_{0};
 
-  // Audible beep is requested only for real user commands.
+  // Audible beep is requested only for real user commands when command sound is enabled.
   // Automatic HA-priority re-sends stay silent to avoid repeated beeping.
   bool beep_on_next_write_{false};
+
+  // Marks a real user command. This is separate from beep_on_next_write_ because
+  // display-off climate commands still need one LED_OFF action to keep the display off
+  // even when audible confirmation is disabled.
+  bool user_command_next_write_{false};
+
+  // User-configurable local mute for command confirmation beeps.
+  bool command_sound_enabled_{true};
 
   // Byte 36 in TX is an action-style display command, not a stable state field.
   // Keep it neutral for normal climate writes so repeated silent retries do not
@@ -326,6 +347,7 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
 #endif
 
   ACHILEDTargetSwitch *led_switch_{nullptr};
+  ACHICommandSoundSwitch *sound_switch_{nullptr};
 
   bool enable_presets_{true};
 

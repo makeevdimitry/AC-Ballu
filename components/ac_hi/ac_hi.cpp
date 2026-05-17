@@ -48,6 +48,14 @@ void ACHILEDTargetSwitch::write_state(bool state) {
   publish_state(state);
 }
 
+// ---- ACHICommandSoundSwitch ----
+void ACHICommandSoundSwitch::write_state(bool state) {
+  if (parent_ != nullptr) {
+    parent_->set_command_sound_enabled(state);
+  }
+  publish_state(state);
+}
+
 // ---- ACHIClimate implementation ----
 
 void ACHIClimate::setup() {
@@ -87,6 +95,7 @@ void ACHIClimate::setup() {
 
   publish_state();
   update_led_switch_state_();
+  update_sound_switch_state_();
 
   // Pre‑reserve buffers to avoid reallocations
   rx_.reserve(RX_BUFFER_RESERVE);
@@ -342,9 +351,11 @@ void ACHIClimate::control(const climate::ClimateCall &call) {
   // Mark that we have a pending command (debounced)
   pending_control_ = true;
   last_control_ms_ = millis();
-  beep_on_next_write_ = true;
+  user_command_next_write_ = true;
+  beep_on_next_write_ = command_sound_enabled_;
 
-  ESP_LOGD(TAG, "Control: new desired state registered, will send after %ums debounce", CONTROL_DEBOUNCE_MS);
+  ESP_LOGD(TAG, "Control: new desired state registered, command_sound=%s, will send after %ums debounce",
+           command_sound_enabled_ ? "ON" : "OFF", CONTROL_DEBOUNCE_MS);
 }
 
 // ---- Build TX frame from desired state ----
@@ -383,11 +394,12 @@ void ACHIClimate::build_tx_from_desired_() {
   // 0xC0/0x40 are explicit display ON/OFF actions.
   // Keep automatic HA-priority re-sends neutral (0x00) so they stay silent.
   // But when the user sends a real climate command while the display is OFF,
-  // include LED_OFF once in that audible command; otherwise this indoor unit
-  // turns the front display back on after mode/preset changes.
+  // include LED_OFF once in that command; otherwise this indoor unit turns the
+  // front display back on after mode/preset changes. This must be independent
+  // from audible confirmation, because sound can be disabled by sound_switch.
   if (led_command_pending_) {
     tx_bytes_[IDX_TX_LED] = d_led_ ? TxValues::LED_ON : TxValues::LED_OFF;
-  } else if (beep_on_next_write_ && !d_led_) {
+  } else if (user_command_next_write_ && !d_led_) {
     tx_bytes_[IDX_TX_LED] = TxValues::LED_OFF;
   } else {
     tx_bytes_[IDX_TX_LED] = 0x00;
@@ -415,6 +427,7 @@ void ACHIClimate::send_write_changes_() {
 
   last_tx_frame_.assign(tx_bytes_.begin(), tx_bytes_.end());
   beep_on_next_write_ = false;
+  user_command_next_write_ = false;
   led_command_pending_ = false;
 
   writing_lock_ = true;
@@ -772,6 +785,11 @@ void ACHIClimate::update_led_switch_state_() {
   led_switch_->publish_state(d_led_);
 }
 
+void ACHIClimate::update_sound_switch_state_() {
+  if (sound_switch_ == nullptr) return;
+  sound_switch_->publish_state(command_sound_enabled_);
+}
+
 void ACHIClimate::maybe_force_to_target_() {
   if (!ha_priority_active_) return;
 
@@ -905,10 +923,19 @@ void ACHIClimate::set_desired_led(bool on) {
 
   pending_control_ = true;
   last_control_ms_ = millis();
-  beep_on_next_write_ = true;
+  user_command_next_write_ = true;
+  beep_on_next_write_ = command_sound_enabled_;
 
-  ESP_LOGD(TAG, "LED switch: desired_led=%s, pending write", on ? "ON" : "OFF");
+  ESP_LOGD(TAG, "LED switch: desired_led=%s, command_sound=%s, pending write",
+           on ? "ON" : "OFF", command_sound_enabled_ ? "ON" : "OFF");
   // update_led_switch_state_() will be called from loop after publish
+}
+
+// ---- External command sound control ----
+void ACHIClimate::set_command_sound_enabled(bool on) {
+  command_sound_enabled_ = on;
+  update_sound_switch_state_();
+  ESP_LOGD(TAG, "Command sound: %s", on ? "ON" : "OFF");
 }
 
 // ---- Field encoders ----

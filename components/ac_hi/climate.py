@@ -8,6 +8,7 @@ AUTO_LOAD = ["climate", "uart", "sensor", "switch", "text_sensor"]
 ac_hi_ns = cg.esphome_ns.namespace("ac_hi")
 ACHIClimate = ac_hi_ns.class_("ACHIClimate", climate.Climate, cg.PollingComponent, uart.UARTDevice)
 ACHILEDTargetSwitch = ac_hi_ns.class_("ACHILEDTargetSwitch", switch.Switch)
+ACHICommandSoundSwitch = ac_hi_ns.class_("ACHICommandSoundSwitch", switch.Switch)
 
 # ESPHome 2025.5+ uses climate.climate_schema(...), older versions still use CLIMATE_SCHEMA.
 if hasattr(climate, "climate_schema"):
@@ -22,6 +23,7 @@ else:
 CONF_ENABLE_PRESETS = "enable_presets"
 CONF_PIPE_TEMPERATURE = "pipe_temperature"
 CONF_LED_SWITCH = "led_switch"
+CONF_SOUND_SWITCH = "sound_switch"
 
 # Existing optional sensor keys
 CONF_SET_TEMPERATURE = "set_temperature"
@@ -77,6 +79,11 @@ CONFIG_SCHEMA = BASE_CLIMATE_SCHEMA.extend({
     cv.Optional(CONF_LED_SWITCH): switch.switch_schema(
         ACHILEDTargetSwitch,
         icon=ICON_LIGHTBULB,
+        entity_category=ENTITY_CATEGORY_CONFIG,
+    ),
+    cv.Optional(CONF_SOUND_SWITCH): switch.switch_schema(
+        ACHICommandSoundSwitch,
+        icon="mdi:volume-high",
         entity_category=ENTITY_CATEGORY_CONFIG,
     ),
 
@@ -173,6 +180,11 @@ async def to_code(config):
     if led_sw_conf := config.get(CONF_LED_SWITCH):
         led_sw = await switch.new_switch(led_sw_conf)
         cg.add(var.set_led_switch(led_sw))
+
+    # Optional command sound switch
+    if sound_sw_conf := config.get(CONF_SOUND_SWITCH):
+        sound_sw = await switch.new_switch(sound_sw_conf)
+        cg.add(var.set_sound_switch(sound_sw))
 
     # New memory diagnostics sensors (optional)
     if conf := config.get(CONF_HEAP_FREE):
