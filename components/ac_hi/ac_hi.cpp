@@ -186,6 +186,15 @@ void ACHIClimate::control(const climate::ClimateCall &call) {
         // Match remote behavior: powering on restores the front display LED.
         d_led_ = true;
       }
+
+      // Do not carry an implicit QUIET fan value from DRY/FAN_ONLY status into
+      // a user mode change. On this indoor unit raw wind code 10 may be reported
+      // by the unit while Quiet Mode Code is still 0; that is not an explicit
+      // Quiet request from HA and should fall back to AUTO when the mode changes.
+      if (!call.get_fan_mode().has_value() && d_fan_ == climate::CLIMATE_FAN_QUIET &&
+          !d_quiet_ && !d_eco_ && !d_turbo_ && d_sleep_stage_ == 0) {
+        d_fan_ = climate::CLIMATE_FAN_AUTO;
+      }
     }
     changed = true;
   }
@@ -567,6 +576,12 @@ void ACHIClimate::parse_status_102_(const std::vector<uint8_t> &b) {
   // On this model Quiet is signaled by the quiet flag, while raw_wind may remain 2.
   if (quiet_) {
     fan_ = climate::CLIMATE_FAN_QUIET;
+  } else if ((mode_ == climate::CLIMATE_MODE_DRY || mode_ == climate::CLIMATE_MODE_FAN_ONLY) && raw_wind == 10) {
+    // In DRY/FAN_ONLY the unit can report raw wind code 10 with Quiet Mode Code = 0.
+    // Treat that as the unit's internal/automatic airflow, not as an explicit
+    // HA Quiet fan request. This prevents QUIET from being learned and carried
+    // into the next mode change.
+    fan_ = climate::CLIMATE_FAN_AUTO;
   } else if (turbo_ && raw_wind == 18) {
     // Turbo uses a dedicated fan code on this platform.
     fan_ = (mode_ == climate::CLIMATE_MODE_HEAT) ? climate::CLIMATE_FAN_AUTO
