@@ -9,6 +9,7 @@ namespace ac_hi {
 
 static const char *const TAG = "ac_hi";
 static const char *const CUSTOM_PRESET_QUIET = "Quiet";
+static const char *const CUSTOM_FAN_TURBO = "Turbo";
 
 // Restore the last target temperature after Turbo is turned off from HA.
 static uint8_t g_pre_turbo_target_c = 24;
@@ -67,6 +68,9 @@ void ACHIClimate::setup() {
   if (enable_presets_) {
     this->set_supported_custom_presets({CUSTOM_PRESET_QUIET});
   }
+  // Fan Turbo is exposed as a custom fan mode, not as a preset.
+  // It only sends raw Wind Mode Code 18 without changing target temperature.
+  this->set_supported_custom_fan_modes({CUSTOM_FAN_TURBO});
 
   // Initial HA‑visible state
   mode = climate::CLIMATE_MODE_OFF;
@@ -79,6 +83,7 @@ void ACHIClimate::setup() {
   d_mode_         = climate::CLIMATE_MODE_OFF;
   d_target_c_     = 24;
   d_fan_          = climate::CLIMATE_FAN_AUTO;
+  d_fan_turbo_    = false;
   d_swing_        = climate::CLIMATE_SWING_OFF;
   d_turbo_        = false;
   d_eco_          = false;
@@ -232,6 +237,7 @@ void ACHIClimate::control(const climate::ClimateCall &call) {
 
   if (call.get_fan_mode().has_value()) {
     d_fan_ = *call.get_fan_mode();
+    d_fan_turbo_ = false;
     d_quiet_ = (d_fan_ == climate::CLIMATE_FAN_QUIET);
     changed = true;
   }
@@ -265,6 +271,7 @@ void ACHIClimate::control(const climate::ClimateCall &call) {
       d_eco_ = true;
       d_turbo_ = false;
       d_sleep_stage_ = 0;
+      d_fan_turbo_ = false;
 
       // Match the behavior observed when ECO is enabled from the remote:
       // target temperature becomes 24°C and fan becomes QUIET.
@@ -278,6 +285,7 @@ void ACHIClimate::control(const climate::ClimateCall &call) {
       }
 
       d_turbo_ = true;
+      d_fan_turbo_ = false;
       d_quiet_ = false;
       if (d_mode_ == climate::CLIMATE_MODE_HEAT) {
         d_target_c_ = 30;
@@ -294,6 +302,7 @@ void ACHIClimate::control(const climate::ClimateCall &call) {
         d_target_c_ += 1;
       }
       d_sleep_stage_ = 2;
+      d_fan_turbo_ = false;
       d_quiet_ = false;
       d_fan_ = climate::CLIMATE_FAN_QUIET;
     } else if (p == climate::CLIMATE_PRESET_NONE) {
@@ -323,7 +332,23 @@ void ACHIClimate::control(const climate::ClimateCall &call) {
       d_turbo_ = false;
       d_eco_ = false;
       d_sleep_stage_ = 0;
+      d_fan_turbo_ = false;
       d_fan_ = climate::CLIMATE_FAN_QUIET;
+      changed = true;
+    }
+  }
+
+  auto custom_fan = call.get_custom_fan_mode();
+  if (!custom_fan.empty()) {
+    if (custom_fan == CUSTOM_FAN_TURBO) {
+      // Fan Turbo is independent from the BOOST preset: keep the current
+      // temperature and mode, but send raw Wind Mode Code 18.
+      d_fan_turbo_ = true;
+      d_fan_ = climate::CLIMATE_FAN_HIGH;
+      d_quiet_ = false;
+      d_turbo_ = false;
+      d_eco_ = false;
+      d_sleep_stage_ = 0;
       changed = true;
     }
   }
@@ -339,7 +364,7 @@ void ACHIClimate::control(const climate::ClimateCall &call) {
   // Publish optimistically
   this->mode = d_power_on_ ? d_mode_ : climate::CLIMATE_MODE_OFF;
   this->target_temperature = d_target_c_;
-  this->fan_mode = d_fan_;
+  publish_fan_state_(d_fan_turbo_, d_fan_);
   this->swing_mode = d_swing_;
   if (enable_presets_) {
     if (d_turbo_) this->set_preset_(climate::CLIMATE_PRESET_BOOST);
@@ -372,7 +397,7 @@ void ACHIClimate::build_tx_from_desired_() {
   tx_bytes_[IDX_SET_TEMP] = encode_temp_(d_target_c_);
 
   // Fan speed (byte 16)
-  tx_bytes_[IDX_WIND] = encode_fan_byte_(d_fan_);
+  tx_bytes_[IDX_WIND] = encode_fan_byte_(d_fan_, d_fan_turbo_);
 
   // Sleep mode (byte 17)
   tx_bytes_[IDX_SLEEP] = encode_sleep_byte_(d_sleep_stage_);
@@ -566,16 +591,20 @@ void ACHIClimate::parse_status_102_(const std::vector<uint8_t> &b) {
   // Fan speed
   uint8_t raw_wind = b[IDX_WIND];
   last_raw_wind_ = raw_wind;
+  fan_turbo_ = false;
   if (power_on_) {
     if (raw_wind == 0 || raw_wind == 1 || raw_wind == 2) fan_ = climate::CLIMATE_FAN_AUTO;
     else if (raw_wind == 10) fan_ = climate::CLIMATE_FAN_QUIET;
     else if (raw_wind == 12) fan_ = climate::CLIMATE_FAN_LOW;
     else if (raw_wind == 14) fan_ = climate::CLIMATE_FAN_MEDIUM;
     else if (raw_wind == 16) fan_ = climate::CLIMATE_FAN_HIGH;
-    else if (raw_wind == 18) fan_ = climate::CLIMATE_FAN_AUTO;  // turbo-specific code, refined below after flags are parsed
-    else fan_ = climate::CLIMATE_FAN_AUTO;
+    else if (raw_wind == 18) {
+      fan_ = climate::CLIMATE_FAN_HIGH;
+      fan_turbo_ = true;
+    } else fan_ = climate::CLIMATE_FAN_AUTO;
   } else {
     fan_ = climate::CLIMATE_FAN_AUTO;   // when off, fan mode is irrelevant
+    fan_turbo_ = false;
   }
 
   // Sleep stage.
@@ -615,16 +644,23 @@ void ACHIClimate::parse_status_102_(const std::vector<uint8_t> &b) {
   // On this model Quiet is signaled by the quiet flag, while raw_wind may remain 2.
   if (quiet_) {
     fan_ = climate::CLIMATE_FAN_QUIET;
+    fan_turbo_ = false;
   } else if ((mode_ == climate::CLIMATE_MODE_DRY || mode_ == climate::CLIMATE_MODE_FAN_ONLY) && raw_wind == 10) {
     // In DRY/FAN_ONLY the unit can report raw wind code 10 with Quiet Mode Code = 0.
     // Treat that as the unit's internal/automatic airflow, not as an explicit
     // HA Quiet fan request. This prevents QUIET from being learned and carried
     // into the next mode change.
     fan_ = climate::CLIMATE_FAN_AUTO;
+    fan_turbo_ = false;
   } else if (turbo_ && raw_wind == 18) {
-    // Turbo uses a dedicated fan code on this platform.
+    // BOOST preset also uses raw Wind Mode Code 18, but it should stay a preset
+    // in HA rather than being shown as custom fan mode Turbo.
+    fan_turbo_ = false;
     fan_ = (mode_ == climate::CLIMATE_MODE_HEAT) ? climate::CLIMATE_FAN_AUTO
                                                  : climate::CLIMATE_FAN_HIGH;
+  } else if (raw_wind == 18) {
+    fan_turbo_ = true;
+    fan_ = climate::CLIMATE_FAN_HIGH;
   }
 
   // Swing
@@ -696,6 +732,14 @@ void ACHIClimate::handle_ack_101_() {
 }
 
 // ---- Gating and convergence ----
+void ACHIClimate::publish_fan_state_(bool turbo_fan, climate::ClimateFanMode fan) {
+  if (turbo_fan) {
+    this->set_custom_fan_mode_(CUSTOM_FAN_TURBO);
+  } else {
+    this->set_fan_mode_(fan);
+  }
+}
+
 void ACHIClimate::publish_gated_state_() {
   if (accept_remote_changes_) {
     // Publish actual state (from AC). Some Hisense units do not return explicit
@@ -712,6 +756,7 @@ void ACHIClimate::publish_gated_state_() {
     bool out_quiet = quiet_;
     uint8_t out_sleep_stage = sleep_stage_;
     auto out_fan = fan_;
+    bool out_fan_turbo = fan_turbo_;
 
     if (power_on_ && d_power_on_ && mode_ == d_mode_ && target_c_ == d_target_c_) {
       if (d_turbo_ && last_raw_wind_ == 18) {
@@ -720,30 +765,41 @@ void ACHIClimate::publish_gated_state_() {
         out_quiet = false;
         out_sleep_stage = 0;
         out_fan = d_fan_;
+        out_fan_turbo = false;
       } else if (d_eco_ && last_raw_wind_ == 10) {
         out_turbo = false;
         out_eco = true;
         out_quiet = false;
         out_sleep_stage = 0;
         out_fan = d_fan_;
+        out_fan_turbo = false;
       } else if (d_sleep_stage_ > 0 && last_raw_wind_ == 10) {
         out_turbo = false;
         out_eco = false;
         out_quiet = false;
         out_sleep_stage = d_sleep_stage_;
         out_fan = d_fan_;
+        out_fan_turbo = false;
       } else if (d_quiet_ && (quiet_ || fan_ == climate::CLIMATE_FAN_QUIET)) {
         out_turbo = false;
         out_eco = false;
         out_quiet = true;
         out_sleep_stage = 0;
         out_fan = climate::CLIMATE_FAN_QUIET;
+        out_fan_turbo = false;
+      } else if (d_fan_turbo_ && last_raw_wind_ == 18) {
+        out_turbo = false;
+        out_eco = false;
+        out_quiet = false;
+        out_sleep_stage = 0;
+        out_fan = d_fan_;
+        out_fan_turbo = true;
       }
     }
 
     this->mode = power_on_ ? mode_ : climate::CLIMATE_MODE_OFF;
     this->target_temperature = target_c_;
-    this->fan_mode = out_fan;
+    publish_fan_state_(out_fan_turbo, out_fan);
     this->swing_mode = swing_;
     if (enable_presets_) {
       if (out_turbo) this->set_preset_(climate::CLIMATE_PRESET_BOOST);
@@ -759,6 +815,7 @@ void ACHIClimate::publish_gated_state_() {
     d_mode_        = mode_;
     d_target_c_    = target_c_;
     d_fan_         = out_fan;
+    d_fan_turbo_   = out_fan_turbo;
     d_swing_       = swing_;
     d_eco_         = out_eco;
     d_turbo_       = out_turbo;
@@ -770,7 +827,7 @@ void ACHIClimate::publish_gated_state_() {
     // Publish desired state (while enforcing)
     this->mode = d_power_on_ ? d_mode_ : climate::CLIMATE_MODE_OFF;
     this->target_temperature = d_target_c_;
-    this->fan_mode = d_fan_;
+    publish_fan_state_(d_fan_turbo_, d_fan_);
     this->swing_mode = d_swing_;
     if (enable_presets_) {
       if (d_turbo_) this->set_preset_(climate::CLIMATE_PRESET_BOOST);
@@ -826,7 +883,8 @@ void ACHIClimate::maybe_force_to_target_() {
 
 // ---- Signature computation ----
 uint32_t ACHIClimate::compute_control_signature_(bool power, climate::ClimateMode mode,
-                                                 climate::ClimateFanMode fan, climate::ClimateSwingMode swing,
+                                                 climate::ClimateFanMode fan, bool fan_turbo,
+                                                 climate::ClimateSwingMode swing,
                                                  bool eco, bool turbo, bool quiet, bool led,
                                                  uint8_t sleep_stage, uint8_t target_c) const {
   // In OFF state many indoor units keep reporting the last active mode while power is already off.
@@ -837,6 +895,7 @@ uint32_t ACHIClimate::compute_control_signature_(bool power, climate::ClimateMod
     // keep re-sending power-off frames and block a later remote power-on.
     mode = climate::CLIMATE_MODE_OFF;
     fan = climate::CLIMATE_FAN_AUTO;
+    fan_turbo = false;
     swing = climate::CLIMATE_SWING_OFF;
     eco = false;
     turbo = false;
@@ -861,6 +920,7 @@ uint32_t ACHIClimate::compute_control_signature_(bool power, climate::ClimateMod
   mix(power ? 1u : 0u);
   mix(static_cast<uint32_t>(mode));
   mix(static_cast<uint32_t>(fan));
+  mix(fan_turbo ? 1u : 0u);
   mix(static_cast<uint32_t>(swing));
   mix(eco ? 1u : 0u);
   mix(turbo ? 1u : 0u);
@@ -872,7 +932,7 @@ uint32_t ACHIClimate::compute_control_signature_(bool power, climate::ClimateMod
 }
 
 void ACHIClimate::recalc_desired_sig_() {
-  desired_sig_ = compute_control_signature_(d_power_on_, d_mode_, d_fan_, d_swing_,
+  desired_sig_ = compute_control_signature_(d_power_on_, d_mode_, d_fan_, d_fan_turbo_, d_swing_,
                                             d_eco_, d_turbo_, d_quiet_, d_led_, d_sleep_stage_, d_target_c_);
 }
 
@@ -882,6 +942,7 @@ void ACHIClimate::recalc_actual_sig_() {
   bool effective_quiet = quiet_;
   uint8_t effective_sleep_stage = sleep_stage_;
   auto effective_fan = fan_;
+  bool effective_fan_turbo = fan_turbo_;
 
   // Some Hisense indoor units acknowledge special modes only indirectly in
   // status frames. For HA-priority convergence, accept those indirect states
@@ -889,34 +950,45 @@ void ACHIClimate::recalc_actual_sig_() {
   // writes after BOOST/ECO/SLEEP while preserving the original preset display
   // behavior from the working baseline.
   if (ha_priority_active_ && d_power_on_ && power_on_ && mode_ == d_mode_) {
-    if (d_turbo_ && target_c_ == d_target_c_) {
+    if (d_fan_turbo_ && target_c_ == d_target_c_ && last_raw_wind_ == 18) {
+      effective_fan_turbo = true;
+      effective_turbo = false;
+      effective_eco = false;
+      effective_quiet = false;
+      effective_sleep_stage = 0;
+      effective_fan = d_fan_;
+    } else if (d_turbo_ && target_c_ == d_target_c_) {
       effective_turbo = true;
       effective_eco = false;
       effective_quiet = false;
       effective_sleep_stage = 0;
+      effective_fan_turbo = false;
       effective_fan = d_fan_;
     } else if (d_eco_ && target_c_ == d_target_c_ && fan_ == climate::CLIMATE_FAN_QUIET) {
       effective_eco = true;
       effective_turbo = false;
       effective_quiet = false;
       effective_sleep_stage = 0;
+      effective_fan_turbo = false;
       effective_fan = d_fan_;
     } else if (d_sleep_stage_ > 0 && target_c_ == d_target_c_ && fan_ == climate::CLIMATE_FAN_QUIET) {
       effective_sleep_stage = d_sleep_stage_;
       effective_eco = false;
       effective_turbo = false;
       effective_quiet = false;
+      effective_fan_turbo = false;
       effective_fan = d_fan_;
     } else if (d_quiet_ && fan_ == climate::CLIMATE_FAN_QUIET) {
       effective_quiet = true;
       effective_eco = false;
       effective_turbo = false;
       effective_sleep_stage = 0;
+      effective_fan_turbo = false;
       effective_fan = d_fan_;
     }
   }
 
-  actual_sig_ = compute_control_signature_(power_on_, mode_, effective_fan, swing_,
+  actual_sig_ = compute_control_signature_(power_on_, mode_, effective_fan, effective_fan_turbo, swing_,
                                            effective_eco, effective_turbo, effective_quiet,
                                            led_, effective_sleep_stage, target_c_);
 }
@@ -974,8 +1046,12 @@ uint8_t ACHIClimate::encode_mode_hi_nibble_(climate::ClimateMode m) {
   return static_cast<uint8_t>(encode_nibble_from_mode(m) << 4);
 }
 
-uint8_t ACHIClimate::encode_fan_byte_(climate::ClimateFanMode f) {
+uint8_t ACHIClimate::encode_fan_byte_(climate::ClimateFanMode f, bool turbo_fan) {
   uint8_t code = 1;
+  if (turbo_fan) {
+    code = 18;
+    return static_cast<uint8_t>(code + 1);   // writing requires +1
+  }
   switch (f) {
     case climate::CLIMATE_FAN_AUTO:   code = 1;  break;
     case climate::CLIMATE_FAN_LOW:    code = 12; break;

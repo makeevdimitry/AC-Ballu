@@ -191,12 +191,14 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   void publish_gated_state_();
   void update_led_switch_state_();
   void update_sound_switch_state_();
+  void publish_fan_state_(bool turbo_fan, climate::ClimateFanMode fan);
   void maybe_force_to_target_();                     // <-- добавлено объявление
   void maybe_send_pending_control_();                // (опционально, если используется)
 
   // Signatures for convergence detection
   uint32_t compute_control_signature_(bool power, climate::ClimateMode mode,
-                                      climate::ClimateFanMode fan, climate::ClimateSwingMode swing,
+                                      climate::ClimateFanMode fan, bool fan_turbo,
+                                      climate::ClimateSwingMode swing,
                                       bool eco, bool turbo, bool quiet, bool led,
                                       uint8_t sleep_stage, uint8_t target_c) const;
   void recalc_desired_sig_();
@@ -211,7 +213,7 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
     return static_cast<uint8_t>(((std::max<uint8_t>(16, std::min<uint8_t>(30, c))) << 1) | 0x01);
   }
   uint8_t encode_mode_hi_nibble_(climate::ClimateMode m);
-  uint8_t encode_fan_byte_(climate::ClimateFanMode f);
+  uint8_t encode_fan_byte_(climate::ClimateFanMode f, bool turbo_fan);
   uint8_t encode_sleep_byte_(uint8_t stage);
 
   // Logging helper
@@ -285,6 +287,7 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   uint8_t target_c_{24};                // 16..30 °C
   climate::ClimateMode mode_{climate::CLIMATE_MODE_OFF};
   climate::ClimateFanMode fan_{climate::CLIMATE_FAN_AUTO};
+  bool fan_turbo_{false};
   climate::ClimateSwingMode swing_{climate::CLIMATE_SWING_OFF};
   bool turbo_{false};
   bool eco_{false};
@@ -297,6 +300,7 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   uint8_t d_target_c_{24};
   climate::ClimateMode d_mode_{climate::CLIMATE_MODE_OFF};
   climate::ClimateFanMode d_fan_{climate::CLIMATE_FAN_AUTO};
+  bool d_fan_turbo_{false};
   climate::ClimateSwingMode d_swing_{climate::CLIMATE_SWING_OFF};
   bool d_turbo_{false};
   bool d_eco_{false};
