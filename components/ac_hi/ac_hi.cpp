@@ -183,8 +183,12 @@ void ACHIClimate::control(const climate::ClimateCall &call) {
       d_power_on_ = true;
       d_mode_ = m;
       if (!was_power_on) {
-        // Match remote behavior: powering on restores the front display LED.
-        d_led_ = true;
+        // Match remote behavior: powering on restores the front display LED,
+        // but send the display command only if we are actually changing it.
+        if (!d_led_) {
+          d_led_ = true;
+          led_command_pending_ = true;
+        }
       }
 
       // Do not carry an implicit QUIET fan value from DRY/FAN_ONLY status into
@@ -370,8 +374,13 @@ void ACHIClimate::build_tx_from_desired_() {
     tx_bytes_[IDX_TX_QUIET] = d_quiet_ ? TxValues::QUIET_ON : TxValues::QUIET_OFF;
   }
 
-  // LED (byte 36)
-  tx_bytes_[IDX_TX_LED] = d_led_ ? TxValues::LED_ON : TxValues::LED_OFF;
+  // Display/LED command (byte 36).
+  // 0xC0/0x40 are explicit display ON/OFF actions. Do not put the current
+  // display state into every climate write: when the display is OFF, re-sending
+  // 0x40 on automatic retries makes the indoor unit beep even with beep_byte=0.
+  tx_bytes_[IDX_TX_LED] = led_command_pending_
+      ? (d_led_ ? TxValues::LED_ON : TxValues::LED_OFF)
+      : 0x00;
 }
 
 // ---- Send status query ----
@@ -387,13 +396,15 @@ void ACHIClimate::send_write_changes_() {
   build_tx_from_desired_();                // ensure tx_bytes_ reflects latest d_*
   tx_bytes_[IDX_TX_BEEP] = beep_on_next_write_ ? TxValues::BEEP_ON : TxValues::BEEP_OFF;
   calc_and_patch_crc_(tx_bytes_);
-  ESP_LOGD(TAG, "Sending write command (0x65): beep_byte[23]=0x%02X", tx_bytes_[IDX_TX_BEEP]);
+  ESP_LOGD(TAG, "Sending write command (0x65): beep_byte[23]=0x%02X led_byte[36]=0x%02X",
+           tx_bytes_[IDX_TX_BEEP], tx_bytes_[IDX_TX_LED]);
   log_frame_("TX write", tx_bytes_);
   for (auto b : tx_bytes_) write_byte(b);
   flush();
 
   last_tx_frame_.assign(tx_bytes_.begin(), tx_bytes_.end());
   beep_on_next_write_ = false;
+  led_command_pending_ = false;
 
   writing_lock_ = true;
   write_lock_time_ = millis();
@@ -789,6 +800,7 @@ void ACHIClimate::log_sig_diff_() const {
 // ---- External LED control ----
 void ACHIClimate::set_desired_led(bool on) {
   d_led_ = on;
+  led_command_pending_ = true;
   accept_remote_changes_ = false;
   ha_priority_active_ = true;
   recalc_desired_sig_();
