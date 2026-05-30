@@ -149,6 +149,31 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   void set_outdoor_cond_temp_sensor(sensor::Sensor *s) { outdoor_cond_temp_sensor_ = s; }
   void set_compressor_exhaust_temp_sensor(sensor::Sensor *s) { compressor_exhaust_temp_sensor_ = s; }
 
+  // Temporary raw status-byte diagnostics
+  void set_status_byte_22_sensor(sensor::Sensor *s) { status_byte_22_sensor_ = s; }
+  void set_status_byte_23_sensor(sensor::Sensor *s) { status_byte_23_sensor_ = s; }
+  void set_status_byte_24_sensor(sensor::Sensor *s) { status_byte_24_sensor_ = s; }
+  void set_status_byte_25_sensor(sensor::Sensor *s) { status_byte_25_sensor_ = s; }
+  void set_status_byte_26_sensor(sensor::Sensor *s) { status_byte_26_sensor_ = s; }
+  void set_status_byte_27_sensor(sensor::Sensor *s) { status_byte_27_sensor_ = s; }
+  void set_status_byte_28_sensor(sensor::Sensor *s) { status_byte_28_sensor_ = s; }
+  void set_status_byte_29_sensor(sensor::Sensor *s) { status_byte_29_sensor_ = s; }
+  void set_status_byte_30_sensor(sensor::Sensor *s) { status_byte_30_sensor_ = s; }
+  void set_status_byte_31_sensor(sensor::Sensor *s) { status_byte_31_sensor_ = s; }
+  void set_status_byte_38_sensor(sensor::Sensor *s) { status_byte_38_sensor_ = s; }
+  void set_status_byte_39_sensor(sensor::Sensor *s) { status_byte_39_sensor_ = s; }
+  void set_status_byte_40_sensor(sensor::Sensor *s) { status_byte_40_sensor_ = s; }
+  void set_status_byte_41_sensor(sensor::Sensor *s) { status_byte_41_sensor_ = s; }
+  void set_status_byte_47_sensor(sensor::Sensor *s) { status_byte_47_sensor_ = s; }
+  void set_status_byte_48_sensor(sensor::Sensor *s) { status_byte_48_sensor_ = s; }
+  void set_status_byte_49_sensor(sensor::Sensor *s) { status_byte_49_sensor_ = s; }
+  void set_status_byte_50_sensor(sensor::Sensor *s) { status_byte_50_sensor_ = s; }
+  void set_status_byte_51_sensor(sensor::Sensor *s) { status_byte_51_sensor_ = s; }
+  void set_status_byte_52_sensor(sensor::Sensor *s) { status_byte_52_sensor_ = s; }
+  void set_status_byte_53_sensor(sensor::Sensor *s) { status_byte_53_sensor_ = s; }
+  void set_status_byte_54_sensor(sensor::Sensor *s) { status_byte_54_sensor_ = s; }
+  void set_status_byte_55_sensor(sensor::Sensor *s) { status_byte_55_sensor_ = s; }
+
   // Memory diagnostics sensors (optional)
   void set_heap_free_sensor(sensor::Sensor *s) { heap_free_sensor_ = s; }
   void set_heap_total_sensor(sensor::Sensor *s) { heap_total_sensor_ = s; }
@@ -340,6 +365,31 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   sensor::Sensor *outdoor_temp_sensor_{nullptr};
   sensor::Sensor *outdoor_cond_temp_sensor_{nullptr};
   sensor::Sensor *compressor_exhaust_temp_sensor_{nullptr};
+
+  // Temporary raw status-byte diagnostics
+  sensor::Sensor *status_byte_22_sensor_{nullptr};
+  sensor::Sensor *status_byte_23_sensor_{nullptr};
+  sensor::Sensor *status_byte_24_sensor_{nullptr};
+  sensor::Sensor *status_byte_25_sensor_{nullptr};
+  sensor::Sensor *status_byte_26_sensor_{nullptr};
+  sensor::Sensor *status_byte_27_sensor_{nullptr};
+  sensor::Sensor *status_byte_28_sensor_{nullptr};
+  sensor::Sensor *status_byte_29_sensor_{nullptr};
+  sensor::Sensor *status_byte_30_sensor_{nullptr};
+  sensor::Sensor *status_byte_31_sensor_{nullptr};
+  sensor::Sensor *status_byte_38_sensor_{nullptr};
+  sensor::Sensor *status_byte_39_sensor_{nullptr};
+  sensor::Sensor *status_byte_40_sensor_{nullptr};
+  sensor::Sensor *status_byte_41_sensor_{nullptr};
+  sensor::Sensor *status_byte_47_sensor_{nullptr};
+  sensor::Sensor *status_byte_48_sensor_{nullptr};
+  sensor::Sensor *status_byte_49_sensor_{nullptr};
+  sensor::Sensor *status_byte_50_sensor_{nullptr};
+  sensor::Sensor *status_byte_51_sensor_{nullptr};
+  sensor::Sensor *status_byte_52_sensor_{nullptr};
+  sensor::Sensor *status_byte_53_sensor_{nullptr};
+  sensor::Sensor *status_byte_54_sensor_{nullptr};
+  sensor::Sensor *status_byte_55_sensor_{nullptr};
 
   // Memory diagnostics
   sensor::Sensor *heap_free_sensor_{nullptr};

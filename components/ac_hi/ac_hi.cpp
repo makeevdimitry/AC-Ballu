@@ -677,12 +677,22 @@ void ACHIClimate::parse_status_102_(const std::vector<uint8_t> &b) {
   publish_gated_state_();
   update_led_switch_state_();
 
-  // Keep still-unmapped candidate fields available only in verbose logs.
-  ESP_LOGV(TAG,
-           "Extended status: compressor_set=%uHz compressor=%uHz exhaust=%u°C raw_b47=%u/%d raw_b48=%u/%d",
-           b[IDX_COMP_FREQ_SET], b[IDX_COMP_FREQ], b[IDX_COMPRESSOR_EXHAUST_TEMP],
-           b[47], static_cast<int8_t>(b[47]),
-           b[48], static_cast<int8_t>(b[48]));
+
+  // Temporary raw status-byte diagnostics. Values are logged as unsigned/signed pairs.
+  auto raw_u = [&](uint8_t idx) -> unsigned { return (b.size() > idx) ? static_cast<unsigned>(b[idx]) : 0U; };
+  auto raw_s = [&](uint8_t idx) -> int { return (b.size() > idx) ? static_cast<int>(static_cast<int8_t>(b[idx])) : 0; };
+  ESP_LOGD(TAG,
+           "Diag raw 22-31: b22=%u/%d b23=%u/%d b24=%u/%d b25=%u/%d b26=%u/%d b27=%u/%d b28=%u/%d b29=%u/%d b30=%u/%d b31=%u/%d",
+           raw_u(22), raw_s(22), raw_u(23), raw_s(23), raw_u(24), raw_s(24), raw_u(25), raw_s(25), raw_u(26), raw_s(26),
+           raw_u(27), raw_s(27), raw_u(28), raw_s(28), raw_u(29), raw_s(29), raw_u(30), raw_s(30), raw_u(31), raw_s(31));
+  ESP_LOGD(TAG,
+           "Diag raw 38-41: b38=%u/%d b39=%u/%d b40=%u/%d b41=%u/%d",
+           raw_u(38), raw_s(38), raw_u(39), raw_s(39), raw_u(40), raw_s(40), raw_u(41), raw_s(41));
+  ESP_LOGD(TAG,
+           "Diag raw 47-55: b47=%u/%d b48=%u/%d b49=%u/%d b50=%u/%d b51=%u/%d b52=%u/%d b53=%u/%d b54=%u/%d b55=%u/%d",
+           raw_u(47), raw_s(47), raw_u(48), raw_s(48), raw_u(49), raw_s(49), raw_u(50), raw_s(50), raw_u(51), raw_s(51),
+           raw_u(52), raw_s(52), raw_u(53), raw_s(53), raw_u(54), raw_s(54), raw_u(55), raw_s(55));
+
 
   // Publish optional sensors (with sign conversion for outdoor temperatures)
 #ifdef USE_SENSOR
@@ -711,6 +721,31 @@ void ACHIClimate::parse_status_102_(const std::vector<uint8_t> &b) {
   if (compressor_exhaust_temp_sensor_ != nullptr) {
     compressor_exhaust_temp_sensor_->publish_state(static_cast<float>(b[IDX_COMPRESSOR_EXHAUST_TEMP]));
   }
+
+  // Temporary raw status-byte diagnostics
+  if (status_byte_22_sensor_ != nullptr && b.size() > 22) status_byte_22_sensor_->publish_state(static_cast<float>(b[22]));
+  if (status_byte_23_sensor_ != nullptr && b.size() > 23) status_byte_23_sensor_->publish_state(static_cast<float>(b[23]));
+  if (status_byte_24_sensor_ != nullptr && b.size() > 24) status_byte_24_sensor_->publish_state(static_cast<float>(b[24]));
+  if (status_byte_25_sensor_ != nullptr && b.size() > 25) status_byte_25_sensor_->publish_state(static_cast<float>(b[25]));
+  if (status_byte_26_sensor_ != nullptr && b.size() > 26) status_byte_26_sensor_->publish_state(static_cast<float>(b[26]));
+  if (status_byte_27_sensor_ != nullptr && b.size() > 27) status_byte_27_sensor_->publish_state(static_cast<float>(b[27]));
+  if (status_byte_28_sensor_ != nullptr && b.size() > 28) status_byte_28_sensor_->publish_state(static_cast<float>(b[28]));
+  if (status_byte_29_sensor_ != nullptr && b.size() > 29) status_byte_29_sensor_->publish_state(static_cast<float>(b[29]));
+  if (status_byte_30_sensor_ != nullptr && b.size() > 30) status_byte_30_sensor_->publish_state(static_cast<float>(b[30]));
+  if (status_byte_31_sensor_ != nullptr && b.size() > 31) status_byte_31_sensor_->publish_state(static_cast<float>(b[31]));
+  if (status_byte_38_sensor_ != nullptr && b.size() > 38) status_byte_38_sensor_->publish_state(static_cast<float>(b[38]));
+  if (status_byte_39_sensor_ != nullptr && b.size() > 39) status_byte_39_sensor_->publish_state(static_cast<float>(b[39]));
+  if (status_byte_40_sensor_ != nullptr && b.size() > 40) status_byte_40_sensor_->publish_state(static_cast<float>(b[40]));
+  if (status_byte_41_sensor_ != nullptr && b.size() > 41) status_byte_41_sensor_->publish_state(static_cast<float>(b[41]));
+  if (status_byte_47_sensor_ != nullptr && b.size() > 47) status_byte_47_sensor_->publish_state(static_cast<float>(b[47]));
+  if (status_byte_48_sensor_ != nullptr && b.size() > 48) status_byte_48_sensor_->publish_state(static_cast<float>(b[48]));
+  if (status_byte_49_sensor_ != nullptr && b.size() > 49) status_byte_49_sensor_->publish_state(static_cast<float>(b[49]));
+  if (status_byte_50_sensor_ != nullptr && b.size() > 50) status_byte_50_sensor_->publish_state(static_cast<float>(b[50]));
+  if (status_byte_51_sensor_ != nullptr && b.size() > 51) status_byte_51_sensor_->publish_state(static_cast<float>(b[51]));
+  if (status_byte_52_sensor_ != nullptr && b.size() > 52) status_byte_52_sensor_->publish_state(static_cast<float>(b[52]));
+  if (status_byte_53_sensor_ != nullptr && b.size() > 53) status_byte_53_sensor_->publish_state(static_cast<float>(b[53]));
+  if (status_byte_54_sensor_ != nullptr && b.size() > 54) status_byte_54_sensor_->publish_state(static_cast<float>(b[54]));
+  if (status_byte_55_sensor_ != nullptr && b.size() > 55) status_byte_55_sensor_->publish_state(static_cast<float>(b[55]));
 #endif
 
 #ifdef USE_TEXT_SENSOR
