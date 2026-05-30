@@ -27,6 +27,10 @@ CONF_PIPE_TEMPERATURE = "pipe_temperature"
 CONF_LED_SWITCH = "led_switch"
 CONF_SOUND_SWITCH = "sound_switch"
 CONF_IR_TRANSMITTER_ID = "ir_transmitter_id"
+CONF_IFEEL_MQTT_TOPIC = "ifeel_mqtt_topic"
+CONF_IFEEL_MQTT_PAYLOAD = "ifeel_mqtt_payload"
+CONF_IFEEL_MQTT_QOS = "ifeel_mqtt_qos"
+CONF_IFEEL_MQTT_RETAIN = "ifeel_mqtt_retain"
 CONF_ENABLED = "enabled"
 
 # Existing optional sensor keys
@@ -61,6 +65,10 @@ CONFIG_SCHEMA = BASE_CLIMATE_SCHEMA.extend({
     **BASE_CLIMATE_EXTRA,
     cv.Optional(CONF_ENABLE_PRESETS, default=True): cv.boolean,
     cv.Optional(CONF_IR_TRANSMITTER_ID): cv.use_id(remote_base.RemoteTransmitterBase),
+    cv.Optional(CONF_IFEEL_MQTT_TOPIC): cv.string_strict,
+    cv.Optional(CONF_IFEEL_MQTT_PAYLOAD, default="hex"): cv.one_of("hex", "json", lower=True),
+    cv.Optional(CONF_IFEEL_MQTT_QOS, default=0): cv.one_of(0, 1, 2, int=True),
+    cv.Optional(CONF_IFEEL_MQTT_RETAIN, default=False): cv.boolean,
 
     # Optional sensors (existing)
     cv.Optional(CONF_SET_TEMPERATURE): sensor.sensor_schema(),
@@ -122,6 +130,12 @@ async def to_code(config):
     if tx_id := config.get(CONF_IR_TRANSMITTER_ID):
         tx = await cg.get_variable(tx_id)
         cg.add(var.set_ir_transmitter(tx))
+
+    if topic := config.get(CONF_IFEEL_MQTT_TOPIC):
+        cg.add(var.set_ifeel_mqtt_topic(topic))
+    cg.add(var.set_ifeel_mqtt_payload_format(config[CONF_IFEEL_MQTT_PAYLOAD]))
+    cg.add(var.set_ifeel_mqtt_qos(config[CONF_IFEEL_MQTT_QOS]))
+    cg.add(var.set_ifeel_mqtt_retain(config[CONF_IFEEL_MQTT_RETAIN]))
 
     # Optional numeric sensors (existing)
     if conf := config.get(CONF_SET_TEMPERATURE):

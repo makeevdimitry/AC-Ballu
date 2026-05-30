@@ -1,8 +1,12 @@
 #include "ac_hi.h"
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include <Arduino.h>
 #include "esphome/core/log.h"
+#ifdef USE_MQTT
+#include "esphome/components/mqtt/mqtt_client.h"
+#endif
 
 namespace esphome {
 namespace ac_hi {
@@ -585,17 +589,76 @@ Kelon168Data ACHIClimate::build_ifeel_state_(uint8_t temperature, bool enabled, 
   return data;
 }
 
-void ACHIClimate::transmit_kelon_ir_(Kelon168Data data) {
-  if (this->ir_transmitter_ == nullptr) {
-    ESP_LOGW(TAG, "iFeel IR command requested, but ir_transmitter_id is not configured");
-    return;
+std::string ACHIClimate::kelon168_to_hex_(const Kelon168Data &data) const {
+  char buffer[KELON168_STATE_LENGTH * 3 + 1];
+  size_t pos = 0;
+  for (uint8_t i = 0; i < KELON168_STATE_LENGTH; i++) {
+    pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%02X%s", data.state[i],
+                    i + 1 == KELON168_STATE_LENGTH ? "" : " ");
   }
+  return std::string(buffer);
+}
 
-  Kelon168Protocol::checksum(&data);
+std::string ACHIClimate::kelon168_to_json_(const Kelon168Data &data, const char *kind, bool enabled,
+                                            uint8_t temperature) const {
+  std::string bytes = this->kelon168_to_hex_(data);
+  char payload[256];
+  snprintf(payload, sizeof(payload),
+           "{\"protocol\":\"kelon168\",\"kind\":\"%s\",\"command\":\"0x%02X\",\"enabled\":%s,\"temperature\":%u,\"bytes\":\"%s\"}",
+           kind, data.command(), enabled ? "true" : "false", static_cast<unsigned>(temperature), bytes.c_str());
+  return std::string(payload);
+}
+
+bool ACHIClimate::transmit_kelon_ir_(const Kelon168Data &data) {
+  if (this->ir_transmitter_ == nullptr)
+    return false;
+
   auto transmit = this->ir_transmitter_->transmit();
   Kelon168Protocol().encode(transmit.get_data(), data);
   log_kelon168_data("Sending", data);
   transmit.perform();
+  return true;
+}
+
+bool ACHIClimate::publish_kelon_mqtt_(const Kelon168Data &data, const char *kind, bool enabled, uint8_t temperature) {
+  if (this->ifeel_mqtt_topic_.empty())
+    return false;
+
+#ifndef USE_MQTT
+  ESP_LOGW(TAG, "iFeel MQTT topic is configured, but ESPHome mqtt: component is not enabled");
+  return false;
+#else
+  if (mqtt::global_mqtt_client == nullptr || !mqtt::global_mqtt_client->is_connected()) {
+    ESP_LOGW(TAG, "iFeel MQTT command not published because MQTT is not connected");
+    return false;
+  }
+
+  const std::string payload =
+      (this->ifeel_mqtt_payload_format_ == IFEEL_MQTT_PAYLOAD_JSON)
+          ? this->kelon168_to_json_(data, kind, enabled, temperature)
+          : this->kelon168_to_hex_(data);
+
+  const bool ok = mqtt::global_mqtt_client->publish(this->ifeel_mqtt_topic_, payload,
+                                                    this->ifeel_mqtt_qos_, this->ifeel_mqtt_retain_);
+  if (ok) {
+    ESP_LOGI(TAG, "Published iFeel Kelon168 %s to MQTT topic '%s': %s", kind,
+             this->ifeel_mqtt_topic_.c_str(), payload.c_str());
+  } else {
+    ESP_LOGW(TAG, "Failed to publish iFeel Kelon168 %s to MQTT topic '%s'", kind,
+             this->ifeel_mqtt_topic_.c_str());
+  }
+  return ok;
+#endif
+}
+
+void ACHIClimate::emit_kelon_ifeel_(Kelon168Data data, const char *kind, bool enabled, uint8_t temperature) {
+  Kelon168Protocol::checksum(&data);
+  const bool sent_ir = this->transmit_kelon_ir_(data);
+  const bool published_mqtt = this->publish_kelon_mqtt_(data, kind, enabled, temperature);
+
+  if (!sent_ir && !published_mqtt) {
+    ESP_LOGW(TAG, "iFeel Kelon168 command was formed but not sent: configure ir_transmitter_id and/or ifeel_mqtt_topic");
+  }
 }
 
 void ACHIClimate::send_ifeel(float temperature, bool enabled) {
@@ -632,19 +695,19 @@ void ACHIClimate::send_ifeel(float temperature, bool enabled) {
     // Always send OFF when requested. After reboot we may not know whether the remote
     // had previously enabled iFeel, so a forced OFF frame is safer than relying on memory.
     auto off = this->build_ifeel_state_(0, false, false);
-    this->transmit_kelon_ir_(off);
+    this->emit_kelon_ifeel_(off, "off", false, 0);
     return;
   }
 
   if (state_changed) {
     auto on = this->build_ifeel_state_(this->ifeel_temperature_, true, false);
-    this->transmit_kelon_ir_(on);
+    this->emit_kelon_ifeel_(on, "on", true, this->ifeel_temperature_);
   }
 
   // While enabled, send an update frame every time the action is called so the AC
   // receives the current external temperature from HA/ESPHome.
   auto update = this->build_ifeel_state_(this->ifeel_temperature_, true, true);
-  this->transmit_kelon_ir_(update);
+  this->emit_kelon_ifeel_(update, "update", true, this->ifeel_temperature_);
 }
 
 // ---- CRC calculation ----

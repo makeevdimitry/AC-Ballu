@@ -19,12 +19,18 @@
 #include <vector>
 #include <cstdint>
 #include <algorithm>
+#include <string>
 
 namespace esphome {
 namespace ac_hi {
 
 // Forward declarations
 class ACHIClimate;
+
+enum ACHIIFeelMqttPayloadFormat : uint8_t {
+  IFEEL_MQTT_PAYLOAD_HEX = 0,
+  IFEEL_MQTT_PAYLOAD_JSON = 1,
+};
 
 // Simple switch that controls desired LED flag
 class ACHILEDTargetSwitch : public switch_::Switch {
@@ -137,6 +143,12 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   void set_led_switch(ACHILEDTargetSwitch *s) { led_switch_ = s; if (led_switch_) led_switch_->set_parent(this); }
   void set_sound_switch(ACHICommandSoundSwitch *s) { sound_switch_ = s; if (sound_switch_) sound_switch_->set_parent(this); }
   void set_ir_transmitter(remote_base::RemoteTransmitterBase *t) { ir_transmitter_ = t; }
+  void set_ifeel_mqtt_topic(const std::string &topic) { ifeel_mqtt_topic_ = topic; }
+  void set_ifeel_mqtt_payload_format(const std::string &format) {
+    ifeel_mqtt_payload_format_ = (format == "json") ? IFEEL_MQTT_PAYLOAD_JSON : IFEEL_MQTT_PAYLOAD_HEX;
+  }
+  void set_ifeel_mqtt_qos(uint8_t qos) { ifeel_mqtt_qos_ = qos > 2 ? 0 : qos; }
+  void set_ifeel_mqtt_retain(bool retain) { ifeel_mqtt_retain_ = retain; }
 
   // Send/clear iFeel (Follow Me) over Kelon168 IR while UART climate remains the source of truth.
   void send_ifeel(float temperature, bool enabled);
@@ -192,7 +204,11 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   // IR iFeel helpers
   Kelon168Data build_kelon_state_from_current_(uint8_t command) const;
   Kelon168Data build_ifeel_state_(uint8_t temperature, bool enabled, bool update) const;
-  void transmit_kelon_ir_(Kelon168Data data);
+  bool transmit_kelon_ir_(const Kelon168Data &data);
+  bool publish_kelon_mqtt_(const Kelon168Data &data, const char *kind, bool enabled, uint8_t temperature);
+  void emit_kelon_ifeel_(Kelon168Data data, const char *kind, bool enabled, uint8_t temperature);
+  std::string kelon168_to_hex_(const Kelon168Data &data) const;
+  std::string kelon168_to_json_(const Kelon168Data &data, const char *kind, bool enabled, uint8_t temperature) const;
   void set_kelon_fan_(Kelon168Data *data, climate::ClimateFanMode fan_mode, bool turbo_fan) const;
   uint8_t encode_kelon_mode_(climate::ClimateMode mode) const;
   void calc_and_patch_crc_(std::vector<uint8_t> &buf);
@@ -261,8 +277,12 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   // User-configurable local mute for command confirmation beeps.
   bool command_sound_enabled_{true};
 
-  // Optional Kelon168 IR transmitter for iFeel / Follow Me commands.
+  // Optional Kelon168 IR/MQTT output for iFeel / Follow Me commands.
   remote_base::RemoteTransmitterBase *ir_transmitter_{nullptr};
+  std::string ifeel_mqtt_topic_{};
+  ACHIIFeelMqttPayloadFormat ifeel_mqtt_payload_format_{IFEEL_MQTT_PAYLOAD_HEX};
+  uint8_t ifeel_mqtt_qos_{0};
+  bool ifeel_mqtt_retain_{false};
   bool ifeel_enabled_{false};
   uint8_t ifeel_temperature_{0};
 
