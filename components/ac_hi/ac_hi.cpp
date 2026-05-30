@@ -590,6 +590,16 @@ Kelon168Data ACHIClimate::build_ifeel_state_(uint8_t temperature, bool enabled, 
   // are preserved as much as the protocol allows.
   data.state[6] = update ? 0x08 : 0x87;
   data.state[7] = update ? 0x03 : 0x3B;
+
+  // Important: keep iFeel frames neutral for louvers. On this indoor unit the
+  // swing bits (state[2] bit 0x80 and state[8] bits 0x40/0x80) are safe in
+  // dedicated swing commands, but if they are also present in an iFeel/follow-me
+  // frame the unit may treat the frame as a louver command and stop active swing.
+  // So iFeel preserves fan/mode/temperature, but does not encode vertical or
+  // horizontal swing bits at all. Existing louver motion is left untouched.
+  data.state[2] &= ~0x80;
+  data.state[8] &= ~0xC0;
+
   data.state[11] = enabled ? KELON168_FOLLOW_ME_ENABLED : 0x00;
   data.state[12] = enabled ? temperature : 0x00;
   data.state[15] = update ? KELON168_COMMAND_LIGHT : KELON168_COMMAND_IFEEL;
