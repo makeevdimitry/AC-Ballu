@@ -1,14 +1,16 @@
 import esphome.codegen as cg
+from esphome import automation
 import esphome.config_validation as cv
-from esphome.components import climate, uart, sensor, switch, text_sensor
-from esphome.const import CONF_ID, CONF_UART_ID, CONF_NAME, ENTITY_CATEGORY_CONFIG, ICON_LIGHTBULB
+from esphome.components import climate, uart, sensor, switch, text_sensor, remote_base
+from esphome.const import CONF_ID, CONF_UART_ID, CONF_NAME, CONF_TEMPERATURE, ENTITY_CATEGORY_CONFIG, ICON_LIGHTBULB
 
-AUTO_LOAD = ["climate", "uart", "sensor", "switch", "text_sensor"]
+AUTO_LOAD = ["climate", "uart", "sensor", "switch", "text_sensor", "remote_base"]
 
 ac_hi_ns = cg.esphome_ns.namespace("ac_hi")
 ACHIClimate = ac_hi_ns.class_("ACHIClimate", climate.Climate, cg.PollingComponent, uart.UARTDevice)
 ACHILEDTargetSwitch = ac_hi_ns.class_("ACHILEDTargetSwitch", switch.Switch)
 ACHICommandSoundSwitch = ac_hi_ns.class_("ACHICommandSoundSwitch", switch.Switch)
+ACHIIFeelAction = ac_hi_ns.class_("ACHIIFeelAction", automation.Action)
 
 # ESPHome 2025.5+ uses climate.climate_schema(...), older versions still use CLIMATE_SCHEMA.
 if hasattr(climate, "climate_schema"):
@@ -24,6 +26,8 @@ CONF_ENABLE_PRESETS = "enable_presets"
 CONF_PIPE_TEMPERATURE = "pipe_temperature"
 CONF_LED_SWITCH = "led_switch"
 CONF_SOUND_SWITCH = "sound_switch"
+CONF_IR_TRANSMITTER_ID = "ir_transmitter_id"
+CONF_ENABLED = "enabled"
 
 # Existing optional sensor keys
 CONF_SET_TEMPERATURE = "set_temperature"
@@ -43,31 +47,6 @@ CONF_OUTDOOR_TEMP = "outdoor_temperature"
 CONF_OUTDOOR_COND_TEMP = "outdoor_condenser_temperature"
 CONF_COMPRESSOR_EXHAUST_TEMP = "compressor_exhaust_temperature"
 
-# Temporary raw status-byte diagnostics. Remove from YAML after mapping is confirmed.
-CONF_STATUS_BYTE_22 = "status_byte_22"
-CONF_STATUS_BYTE_23 = "status_byte_23"
-CONF_STATUS_BYTE_24 = "status_byte_24"
-CONF_STATUS_BYTE_25 = "status_byte_25"
-CONF_STATUS_BYTE_26 = "status_byte_26"
-CONF_STATUS_BYTE_27 = "status_byte_27"
-CONF_STATUS_BYTE_28 = "status_byte_28"
-CONF_STATUS_BYTE_29 = "status_byte_29"
-CONF_STATUS_BYTE_30 = "status_byte_30"
-CONF_STATUS_BYTE_31 = "status_byte_31"
-CONF_STATUS_BYTE_38 = "status_byte_38"
-CONF_STATUS_BYTE_39 = "status_byte_39"
-CONF_STATUS_BYTE_40 = "status_byte_40"
-CONF_STATUS_BYTE_41 = "status_byte_41"
-CONF_STATUS_BYTE_47 = "status_byte_47"
-CONF_STATUS_BYTE_48 = "status_byte_48"
-CONF_STATUS_BYTE_49 = "status_byte_49"
-CONF_STATUS_BYTE_50 = "status_byte_50"
-CONF_STATUS_BYTE_51 = "status_byte_51"
-CONF_STATUS_BYTE_52 = "status_byte_52"
-CONF_STATUS_BYTE_53 = "status_byte_53"
-CONF_STATUS_BYTE_54 = "status_byte_54"
-CONF_STATUS_BYTE_55 = "status_byte_55"
-
 # New memory diagnostics sensor keys
 CONF_HEAP_FREE = "heap_free"
 CONF_HEAP_TOTAL = "heap_total"
@@ -81,6 +60,7 @@ CONF_PSRAM_FREE = "psram_free"
 CONFIG_SCHEMA = BASE_CLIMATE_SCHEMA.extend({
     **BASE_CLIMATE_EXTRA,
     cv.Optional(CONF_ENABLE_PRESETS, default=True): cv.boolean,
+    cv.Optional(CONF_IR_TRANSMITTER_ID): cv.use_id(remote_base.RemoteTransmitterBase),
 
     # Optional sensors (existing)
     cv.Optional(CONF_SET_TEMPERATURE): sensor.sensor_schema(),
@@ -98,31 +78,6 @@ CONFIG_SCHEMA = BASE_CLIMATE_SCHEMA.extend({
     cv.Optional(CONF_OUTDOOR_TEMP): sensor.sensor_schema(),
     cv.Optional(CONF_OUTDOOR_COND_TEMP): sensor.sensor_schema(),
     cv.Optional(CONF_COMPRESSOR_EXHAUST_TEMP): sensor.sensor_schema(),
-
-    # Temporary raw status-byte diagnostics
-    cv.Optional(CONF_STATUS_BYTE_22): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_23): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_24): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_25): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_26): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_27): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_28): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_29): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_30): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_31): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_38): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_39): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_40): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_41): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_47): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_48): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_49): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_50): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_51): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_52): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_53): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_54): sensor.sensor_schema(),
-    cv.Optional(CONF_STATUS_BYTE_55): sensor.sensor_schema(),
 
     # Power status is a text sensor ("ON"/"OFF")
     cv.Optional(CONF_POWER_STATUS): text_sensor.text_sensor_schema(),
@@ -163,6 +118,10 @@ async def to_code(config):
     cg.add(var.set_uart_parent(uart_comp))
 
     cg.add(var.set_enable_presets(config[CONF_ENABLE_PRESETS]))
+
+    if tx_id := config.get(CONF_IR_TRANSMITTER_ID):
+        tx = await cg.get_variable(tx_id)
+        cg.add(var.set_ir_transmitter(tx))
 
     # Optional numeric sensors (existing)
     if conf := config.get(CONF_SET_TEMPERATURE):
@@ -225,77 +184,6 @@ async def to_code(config):
         sens = await sensor.new_sensor(conf)
         cg.add(var.set_compressor_exhaust_temp_sensor(sens))
 
-    # Temporary raw status-byte diagnostics
-    if conf := config.get(CONF_STATUS_BYTE_22):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_22_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_23):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_23_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_24):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_24_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_25):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_25_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_26):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_26_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_27):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_27_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_28):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_28_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_29):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_29_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_30):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_30_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_31):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_31_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_38):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_38_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_39):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_39_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_40):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_40_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_41):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_41_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_47):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_47_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_48):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_48_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_49):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_49_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_50):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_50_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_51):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_51_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_52):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_52_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_53):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_53_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_54):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_54_sensor(sens))
-    if conf := config.get(CONF_STATUS_BYTE_55):
-        sens = await sensor.new_sensor(conf)
-        cg.add(var.set_status_byte_55_sensor(sens))
-
     # Optional text sensor for power status
     if conf := config.get(CONF_POWER_STATUS):
         ts = await text_sensor.new_text_sensor(conf)
@@ -348,3 +236,28 @@ async def to_code(config):
     if conf := config.get(CONF_PSRAM_FREE):
         sens = await sensor.new_sensor(conf)
         cg.add(var.set_psram_free_sensor(sens))
+
+IFEEL_SCHEMA = cv.Schema(
+    {
+        cv.Required(CONF_ID): cv.use_id(ACHIClimate),
+        cv.Required(CONF_TEMPERATURE): cv.templatable(cv.float_),
+        cv.Optional(CONF_ENABLED, default=True): cv.templatable(cv.boolean),
+    }
+)
+
+
+@automation.register_action(
+    "ac_hi.ifeel",
+    ACHIIFeelAction,
+    IFEEL_SCHEMA,
+    synchronous=True,
+)
+async def ifeel_to_code(config, action_id, template_arg, args):
+    parent = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, parent)
+    template_ = await cg.templatable(config[CONF_TEMPERATURE], args, cg.float_)
+    cg.add(var.set_temperature(template_))
+    template_ = await cg.templatable(config[CONF_ENABLED], args, bool)
+    cg.add(var.set_enabled(template_))
+    return var
+

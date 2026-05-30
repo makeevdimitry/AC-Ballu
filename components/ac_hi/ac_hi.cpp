@@ -8,6 +8,17 @@ namespace esphome {
 namespace ac_hi {
 
 static const char *const TAG = "ac_hi";
+
+static void log_kelon168_data(const char *prefix, const Kelon168Data &data) {
+  char buffer[KELON168_STATE_LENGTH * 3 + 1];
+  size_t pos = 0;
+  for (uint8_t i = 0; i < KELON168_STATE_LENGTH; i++) {
+    pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%02X%s", data.state[i],
+                    i + 1 == KELON168_STATE_LENGTH ? "" : " ");
+  }
+  ESP_LOGI(TAG, "%s Kelon168 IR: %s (command=0x%02X)", prefix, buffer, data.command());
+}
+
 static const char *const CUSTOM_PRESET_QUIET = "Тихий";
 static const char *const CUSTOM_FAN_TURBO = "Турбо";
 
@@ -461,6 +472,181 @@ void ACHIClimate::send_write_changes_() {
   write_lock_time_ = millis();
 }
 
+// ---- IR iFeel / Follow Me over Kelon168 ----
+uint8_t ACHIClimate::encode_kelon_mode_(climate::ClimateMode mode) const {
+  switch (mode) {
+    case climate::CLIMATE_MODE_HEAT:
+      return KELON168_MODE_HEAT;
+    case climate::CLIMATE_MODE_COOL:
+      return KELON168_MODE_COOL;
+    case climate::CLIMATE_MODE_DRY:
+      return KELON168_MODE_DRY;
+    case climate::CLIMATE_MODE_FAN_ONLY:
+      return KELON168_MODE_FAN;
+    default:
+      return KELON168_MODE_AUTO;
+  }
+}
+
+void ACHIClimate::set_kelon_fan_(Kelon168Data *data, climate::ClimateFanMode fan_mode, bool turbo_fan) const {
+  data->state[2] &= ~0x03;
+  data->state[17] &= ~0x40;
+
+  if (turbo_fan) {
+    data->state[2] |= 0x01;  // High airflow in Kelon168 IR encoding.
+    return;
+  }
+
+  switch (fan_mode) {
+    case climate::CLIMATE_FAN_LOW:
+      data->state[2] |= 0x03;
+      data->state[17] |= 0x40;
+      break;
+    case climate::CLIMATE_FAN_MEDIUM:
+      data->state[2] |= 0x02;
+      break;
+    case climate::CLIMATE_FAN_HIGH:
+      data->state[2] |= 0x01;
+      break;
+    case climate::CLIMATE_FAN_QUIET:
+      // Kelon168 has no explicit Quiet fan value in this implementation.
+      // Use the least aggressive airflow so the iFeel frame remains conservative.
+      data->state[2] |= 0x03;
+      data->state[17] |= 0x40;
+      break;
+    case climate::CLIMATE_FAN_AUTO:
+    default:
+      break;
+  }
+}
+
+Kelon168Data ACHIClimate::build_kelon_state_from_current_(uint8_t command) const {
+  auto data = Kelon168Protocol::make_default();
+
+  // Prefer the real state parsed from UART. Before the first status frame arrives,
+  // fall back to the HA desired state so iFeel still has a sane base frame.
+  const bool have_actual = !this->last_status_frame_.empty();
+  const bool base_power = have_actual ? this->power_on_ : this->d_power_on_;
+  auto base_mode = have_actual ? this->mode_ : this->d_mode_;
+  auto base_fan = have_actual ? this->fan_ : this->d_fan_;
+  const bool base_fan_turbo = have_actual ? this->fan_turbo_ : this->d_fan_turbo_;
+  auto base_swing = have_actual ? this->swing_ : this->d_swing_;
+  const bool base_boost = have_actual ? this->turbo_ : this->d_turbo_;
+  const uint8_t base_sleep_stage = have_actual ? this->sleep_stage_ : this->d_sleep_stage_;
+  uint8_t base_target = have_actual ? this->target_c_ : this->d_target_c_;
+
+  if (!base_power && base_mode == climate::CLIMATE_MODE_OFF) {
+    // The unit ignores climate fields in iFeel frames, but OFF has no native Kelon168
+    // mode. Keep a neutral COOL/24 base if someone calls the action too early.
+    base_mode = climate::CLIMATE_MODE_COOL;
+    base_fan = climate::CLIMATE_FAN_AUTO;
+    base_swing = climate::CLIMATE_SWING_OFF;
+    base_target = 24;
+  }
+
+  base_target = std::max<uint8_t>(16, std::min<uint8_t>(30, base_target));
+  const uint8_t native_mode = this->encode_kelon_mode_(base_mode);
+
+  data.state[2] = 0x00;
+  if (base_sleep_stage > 0)
+    data.state[2] |= 0x08;
+  if (base_swing == climate::CLIMATE_SWING_VERTICAL || base_swing == climate::CLIMATE_SWING_BOTH)
+    data.state[2] |= 0x80;
+
+  this->set_kelon_fan_(&data, base_fan, base_fan_turbo);
+  data.state[3] = static_cast<uint8_t>((native_mode & 0x07) | ((base_target - 16) << 4));
+
+  if (base_boost)
+    data.state[5] |= 0x90;
+  if (base_swing == climate::CLIMATE_SWING_VERTICAL || base_swing == climate::CLIMATE_SWING_BOTH)
+    data.state[8] |= 0x40;
+  if (base_swing == climate::CLIMATE_SWING_HORIZONTAL || base_swing == climate::CLIMATE_SWING_BOTH)
+    data.state[8] |= 0x80;
+
+  data.state[11] = this->ifeel_enabled_ ? KELON168_FOLLOW_ME_ENABLED : 0x00;
+  data.state[12] = this->ifeel_enabled_ ? this->ifeel_temperature_ : 0x00;
+  data.state[15] = command;
+  Kelon168Protocol::checksum(&data);
+  return data;
+}
+
+Kelon168Data ACHIClimate::build_ifeel_state_(uint8_t temperature, bool enabled, bool update) const {
+  auto data = this->build_kelon_state_from_current_(update ? KELON168_COMMAND_LIGHT : KELON168_COMMAND_IFEEL);
+
+  // These bytes match the captured Kelon168 FollowMe frames from the donor IR project.
+  // The rest of the frame is built from the current UART state so normal AC settings
+  // are preserved as much as the protocol allows.
+  data.state[6] = update ? 0x08 : 0x87;
+  data.state[7] = update ? 0x03 : 0x3B;
+  data.state[11] = enabled ? KELON168_FOLLOW_ME_ENABLED : 0x00;
+  data.state[12] = enabled ? temperature : 0x00;
+  data.state[15] = update ? KELON168_COMMAND_LIGHT : KELON168_COMMAND_IFEEL;
+  Kelon168Protocol::checksum(&data);
+  return data;
+}
+
+void ACHIClimate::transmit_kelon_ir_(Kelon168Data data) {
+  if (this->ir_transmitter_ == nullptr) {
+    ESP_LOGW(TAG, "iFeel IR command requested, but ir_transmitter_id is not configured");
+    return;
+  }
+
+  Kelon168Protocol::checksum(&data);
+  auto transmit = this->ir_transmitter_->transmit();
+  Kelon168Protocol().encode(transmit.get_data(), data);
+  log_kelon168_data("Sending", data);
+  transmit.perform();
+}
+
+void ACHIClimate::send_ifeel(float temperature, bool enabled) {
+  const bool have_actual = !this->last_status_frame_.empty();
+  const bool is_on = have_actual ? this->power_on_ : this->d_power_on_;
+
+  if (!is_on) {
+    this->ifeel_enabled_ = false;
+    this->ifeel_temperature_ = 0;
+    ESP_LOGD(TAG, "Skipping iFeel IR command because AC is off");
+    return;
+  }
+
+  uint8_t temp_c = this->ifeel_temperature_;
+  if (enabled) {
+    if (!std::isfinite(temperature)) {
+      ESP_LOGW(TAG, "Skipping iFeel IR command because temperature is unavailable");
+      return;
+    }
+    int rounded = static_cast<int>(std::lround(temperature));
+    rounded = std::max(0, std::min(50, rounded));
+    temp_c = static_cast<uint8_t>(rounded);
+  }
+
+  const bool state_changed = this->ifeel_enabled_ != enabled;
+  this->ifeel_enabled_ = enabled;
+  this->ifeel_temperature_ = enabled ? temp_c : 0;
+
+  ESP_LOGD(TAG, "iFeel IR: enabled=%s temperature=%u°C state_changed=%s",
+           enabled ? "true" : "false", static_cast<unsigned>(this->ifeel_temperature_),
+           state_changed ? "true" : "false");
+
+  if (!enabled) {
+    // Always send OFF when requested. After reboot we may not know whether the remote
+    // had previously enabled iFeel, so a forced OFF frame is safer than relying on memory.
+    auto off = this->build_ifeel_state_(0, false, false);
+    this->transmit_kelon_ir_(off);
+    return;
+  }
+
+  if (state_changed) {
+    auto on = this->build_ifeel_state_(this->ifeel_temperature_, true, false);
+    this->transmit_kelon_ir_(on);
+  }
+
+  // While enabled, send an update frame every time the action is called so the AC
+  // receives the current external temperature from HA/ESPHome.
+  auto update = this->build_ifeel_state_(this->ifeel_temperature_, true, true);
+  this->transmit_kelon_ir_(update);
+}
+
 // ---- CRC calculation ----
 void ACHIClimate::calc_and_patch_crc_(std::vector<uint8_t> &buf) {
   size_t n = buf.size();
@@ -677,22 +863,12 @@ void ACHIClimate::parse_status_102_(const std::vector<uint8_t> &b) {
   publish_gated_state_();
   update_led_switch_state_();
 
-
-  // Temporary raw status-byte diagnostics. Values are logged as unsigned/signed pairs.
-  auto raw_u = [&](uint8_t idx) -> unsigned { return (b.size() > idx) ? static_cast<unsigned>(b[idx]) : 0U; };
-  auto raw_s = [&](uint8_t idx) -> int { return (b.size() > idx) ? static_cast<int>(static_cast<int8_t>(b[idx])) : 0; };
-  ESP_LOGD(TAG,
-           "Diag raw 22-31: b22=%u/%d b23=%u/%d b24=%u/%d b25=%u/%d b26=%u/%d b27=%u/%d b28=%u/%d b29=%u/%d b30=%u/%d b31=%u/%d",
-           raw_u(22), raw_s(22), raw_u(23), raw_s(23), raw_u(24), raw_s(24), raw_u(25), raw_s(25), raw_u(26), raw_s(26),
-           raw_u(27), raw_s(27), raw_u(28), raw_s(28), raw_u(29), raw_s(29), raw_u(30), raw_s(30), raw_u(31), raw_s(31));
-  ESP_LOGD(TAG,
-           "Diag raw 38-41: b38=%u/%d b39=%u/%d b40=%u/%d b41=%u/%d",
-           raw_u(38), raw_s(38), raw_u(39), raw_s(39), raw_u(40), raw_s(40), raw_u(41), raw_s(41));
-  ESP_LOGD(TAG,
-           "Diag raw 47-55: b47=%u/%d b48=%u/%d b49=%u/%d b50=%u/%d b51=%u/%d b52=%u/%d b53=%u/%d b54=%u/%d b55=%u/%d",
-           raw_u(47), raw_s(47), raw_u(48), raw_s(48), raw_u(49), raw_s(49), raw_u(50), raw_s(50), raw_u(51), raw_s(51),
-           raw_u(52), raw_s(52), raw_u(53), raw_s(53), raw_u(54), raw_s(54), raw_u(55), raw_s(55));
-
+  // Keep still-unmapped candidate fields available only in verbose logs.
+  ESP_LOGV(TAG,
+           "Extended status: compressor_set=%uHz compressor=%uHz exhaust=%u°C raw_b47=%u/%d raw_b48=%u/%d",
+           b[IDX_COMP_FREQ_SET], b[IDX_COMP_FREQ], b[IDX_COMPRESSOR_EXHAUST_TEMP],
+           b[47], static_cast<int8_t>(b[47]),
+           b[48], static_cast<int8_t>(b[48]));
 
   // Publish optional sensors (with sign conversion for outdoor temperatures)
 #ifdef USE_SENSOR
@@ -721,31 +897,6 @@ void ACHIClimate::parse_status_102_(const std::vector<uint8_t> &b) {
   if (compressor_exhaust_temp_sensor_ != nullptr) {
     compressor_exhaust_temp_sensor_->publish_state(static_cast<float>(b[IDX_COMPRESSOR_EXHAUST_TEMP]));
   }
-
-  // Temporary raw status-byte diagnostics
-  if (status_byte_22_sensor_ != nullptr && b.size() > 22) status_byte_22_sensor_->publish_state(static_cast<float>(b[22]));
-  if (status_byte_23_sensor_ != nullptr && b.size() > 23) status_byte_23_sensor_->publish_state(static_cast<float>(b[23]));
-  if (status_byte_24_sensor_ != nullptr && b.size() > 24) status_byte_24_sensor_->publish_state(static_cast<float>(b[24]));
-  if (status_byte_25_sensor_ != nullptr && b.size() > 25) status_byte_25_sensor_->publish_state(static_cast<float>(b[25]));
-  if (status_byte_26_sensor_ != nullptr && b.size() > 26) status_byte_26_sensor_->publish_state(static_cast<float>(b[26]));
-  if (status_byte_27_sensor_ != nullptr && b.size() > 27) status_byte_27_sensor_->publish_state(static_cast<float>(b[27]));
-  if (status_byte_28_sensor_ != nullptr && b.size() > 28) status_byte_28_sensor_->publish_state(static_cast<float>(b[28]));
-  if (status_byte_29_sensor_ != nullptr && b.size() > 29) status_byte_29_sensor_->publish_state(static_cast<float>(b[29]));
-  if (status_byte_30_sensor_ != nullptr && b.size() > 30) status_byte_30_sensor_->publish_state(static_cast<float>(b[30]));
-  if (status_byte_31_sensor_ != nullptr && b.size() > 31) status_byte_31_sensor_->publish_state(static_cast<float>(b[31]));
-  if (status_byte_38_sensor_ != nullptr && b.size() > 38) status_byte_38_sensor_->publish_state(static_cast<float>(b[38]));
-  if (status_byte_39_sensor_ != nullptr && b.size() > 39) status_byte_39_sensor_->publish_state(static_cast<float>(b[39]));
-  if (status_byte_40_sensor_ != nullptr && b.size() > 40) status_byte_40_sensor_->publish_state(static_cast<float>(b[40]));
-  if (status_byte_41_sensor_ != nullptr && b.size() > 41) status_byte_41_sensor_->publish_state(static_cast<float>(b[41]));
-  if (status_byte_47_sensor_ != nullptr && b.size() > 47) status_byte_47_sensor_->publish_state(static_cast<float>(b[47]));
-  if (status_byte_48_sensor_ != nullptr && b.size() > 48) status_byte_48_sensor_->publish_state(static_cast<float>(b[48]));
-  if (status_byte_49_sensor_ != nullptr && b.size() > 49) status_byte_49_sensor_->publish_state(static_cast<float>(b[49]));
-  if (status_byte_50_sensor_ != nullptr && b.size() > 50) status_byte_50_sensor_->publish_state(static_cast<float>(b[50]));
-  if (status_byte_51_sensor_ != nullptr && b.size() > 51) status_byte_51_sensor_->publish_state(static_cast<float>(b[51]));
-  if (status_byte_52_sensor_ != nullptr && b.size() > 52) status_byte_52_sensor_->publish_state(static_cast<float>(b[52]));
-  if (status_byte_53_sensor_ != nullptr && b.size() > 53) status_byte_53_sensor_->publish_state(static_cast<float>(b[53]));
-  if (status_byte_54_sensor_ != nullptr && b.size() > 54) status_byte_54_sensor_->publish_state(static_cast<float>(b[54]));
-  if (status_byte_55_sensor_ != nullptr && b.size() > 55) status_byte_55_sensor_->publish_state(static_cast<float>(b[55]));
 #endif
 
 #ifdef USE_TEXT_SENSOR

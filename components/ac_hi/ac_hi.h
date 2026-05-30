@@ -5,6 +5,9 @@
 #include "esphome/core/component.h"
 #include "esphome/core/hal.h"
 #include "esphome/components/switch/switch.h"
+#include "esphome/components/remote_base/remote_base.h"
+#include "esphome/core/automation.h"
+#include "kelon168_protocol.h"
 
 #ifdef USE_SENSOR
   #include "esphome/components/sensor/sensor.h"
@@ -48,6 +51,8 @@ static constexpr uint8_t HI_HDR0 = 0xF4;
 static constexpr uint8_t HI_HDR1 = 0xF5;
 static constexpr uint8_t HI_TAIL0 = 0xF4;
 static constexpr uint8_t HI_TAIL1 = 0xFB;
+static constexpr uint8_t KELON168_FOLLOW_ME_ENABLED = 0x80;
+
 
 // Indexes of interesting bytes in the frame (0-based)
 enum FrameIndex : uint8_t {
@@ -131,6 +136,10 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
 #endif
   void set_led_switch(ACHILEDTargetSwitch *s) { led_switch_ = s; if (led_switch_) led_switch_->set_parent(this); }
   void set_sound_switch(ACHICommandSoundSwitch *s) { sound_switch_ = s; if (sound_switch_) sound_switch_->set_parent(this); }
+  void set_ir_transmitter(remote_base::RemoteTransmitterBase *t) { ir_transmitter_ = t; }
+
+  // Send/clear iFeel (Follow Me) over Kelon168 IR while UART climate remains the source of truth.
+  void send_ifeel(float temperature, bool enabled);
 
 #ifdef USE_SENSOR
   void set_set_temperature_sensor(sensor::Sensor *s) { set_temp_sensor_ = s; }
@@ -148,31 +157,6 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   void set_outdoor_temp_sensor(sensor::Sensor *s) { outdoor_temp_sensor_ = s; }
   void set_outdoor_cond_temp_sensor(sensor::Sensor *s) { outdoor_cond_temp_sensor_ = s; }
   void set_compressor_exhaust_temp_sensor(sensor::Sensor *s) { compressor_exhaust_temp_sensor_ = s; }
-
-  // Temporary raw status-byte diagnostics
-  void set_status_byte_22_sensor(sensor::Sensor *s) { status_byte_22_sensor_ = s; }
-  void set_status_byte_23_sensor(sensor::Sensor *s) { status_byte_23_sensor_ = s; }
-  void set_status_byte_24_sensor(sensor::Sensor *s) { status_byte_24_sensor_ = s; }
-  void set_status_byte_25_sensor(sensor::Sensor *s) { status_byte_25_sensor_ = s; }
-  void set_status_byte_26_sensor(sensor::Sensor *s) { status_byte_26_sensor_ = s; }
-  void set_status_byte_27_sensor(sensor::Sensor *s) { status_byte_27_sensor_ = s; }
-  void set_status_byte_28_sensor(sensor::Sensor *s) { status_byte_28_sensor_ = s; }
-  void set_status_byte_29_sensor(sensor::Sensor *s) { status_byte_29_sensor_ = s; }
-  void set_status_byte_30_sensor(sensor::Sensor *s) { status_byte_30_sensor_ = s; }
-  void set_status_byte_31_sensor(sensor::Sensor *s) { status_byte_31_sensor_ = s; }
-  void set_status_byte_38_sensor(sensor::Sensor *s) { status_byte_38_sensor_ = s; }
-  void set_status_byte_39_sensor(sensor::Sensor *s) { status_byte_39_sensor_ = s; }
-  void set_status_byte_40_sensor(sensor::Sensor *s) { status_byte_40_sensor_ = s; }
-  void set_status_byte_41_sensor(sensor::Sensor *s) { status_byte_41_sensor_ = s; }
-  void set_status_byte_47_sensor(sensor::Sensor *s) { status_byte_47_sensor_ = s; }
-  void set_status_byte_48_sensor(sensor::Sensor *s) { status_byte_48_sensor_ = s; }
-  void set_status_byte_49_sensor(sensor::Sensor *s) { status_byte_49_sensor_ = s; }
-  void set_status_byte_50_sensor(sensor::Sensor *s) { status_byte_50_sensor_ = s; }
-  void set_status_byte_51_sensor(sensor::Sensor *s) { status_byte_51_sensor_ = s; }
-  void set_status_byte_52_sensor(sensor::Sensor *s) { status_byte_52_sensor_ = s; }
-  void set_status_byte_53_sensor(sensor::Sensor *s) { status_byte_53_sensor_ = s; }
-  void set_status_byte_54_sensor(sensor::Sensor *s) { status_byte_54_sensor_ = s; }
-  void set_status_byte_55_sensor(sensor::Sensor *s) { status_byte_55_sensor_ = s; }
 
   // Memory diagnostics sensors (optional)
   void set_heap_free_sensor(sensor::Sensor *s) { heap_free_sensor_ = s; }
@@ -204,6 +188,13 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   // Protocol I/O
   void send_query_status_();
   void send_write_changes_();
+
+  // IR iFeel helpers
+  Kelon168Data build_kelon_state_from_current_(uint8_t command) const;
+  Kelon168Data build_ifeel_state_(uint8_t temperature, bool enabled, bool update) const;
+  void transmit_kelon_ir_(Kelon168Data data);
+  void set_kelon_fan_(Kelon168Data *data, climate::ClimateFanMode fan_mode, bool turbo_fan) const;
+  uint8_t encode_kelon_mode_(climate::ClimateMode mode) const;
   void calc_and_patch_crc_(std::vector<uint8_t> &buf);
   bool validate_crc_(const std::vector<uint8_t> &buf, uint16_t *out_sum = nullptr) const;
 
@@ -269,6 +260,11 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
 
   // User-configurable local mute for command confirmation beeps.
   bool command_sound_enabled_{true};
+
+  // Optional Kelon168 IR transmitter for iFeel / Follow Me commands.
+  remote_base::RemoteTransmitterBase *ir_transmitter_{nullptr};
+  bool ifeel_enabled_{false};
+  uint8_t ifeel_temperature_{0};
 
   // Byte 36 in TX is an action-style display command, not a stable state field.
   // Keep it neutral for normal climate writes so repeated silent retries do not
@@ -366,31 +362,6 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   sensor::Sensor *outdoor_cond_temp_sensor_{nullptr};
   sensor::Sensor *compressor_exhaust_temp_sensor_{nullptr};
 
-  // Temporary raw status-byte diagnostics
-  sensor::Sensor *status_byte_22_sensor_{nullptr};
-  sensor::Sensor *status_byte_23_sensor_{nullptr};
-  sensor::Sensor *status_byte_24_sensor_{nullptr};
-  sensor::Sensor *status_byte_25_sensor_{nullptr};
-  sensor::Sensor *status_byte_26_sensor_{nullptr};
-  sensor::Sensor *status_byte_27_sensor_{nullptr};
-  sensor::Sensor *status_byte_28_sensor_{nullptr};
-  sensor::Sensor *status_byte_29_sensor_{nullptr};
-  sensor::Sensor *status_byte_30_sensor_{nullptr};
-  sensor::Sensor *status_byte_31_sensor_{nullptr};
-  sensor::Sensor *status_byte_38_sensor_{nullptr};
-  sensor::Sensor *status_byte_39_sensor_{nullptr};
-  sensor::Sensor *status_byte_40_sensor_{nullptr};
-  sensor::Sensor *status_byte_41_sensor_{nullptr};
-  sensor::Sensor *status_byte_47_sensor_{nullptr};
-  sensor::Sensor *status_byte_48_sensor_{nullptr};
-  sensor::Sensor *status_byte_49_sensor_{nullptr};
-  sensor::Sensor *status_byte_50_sensor_{nullptr};
-  sensor::Sensor *status_byte_51_sensor_{nullptr};
-  sensor::Sensor *status_byte_52_sensor_{nullptr};
-  sensor::Sensor *status_byte_53_sensor_{nullptr};
-  sensor::Sensor *status_byte_54_sensor_{nullptr};
-  sensor::Sensor *status_byte_55_sensor_{nullptr};
-
   // Memory diagnostics
   sensor::Sensor *heap_free_sensor_{nullptr};
   sensor::Sensor *heap_total_sensor_{nullptr};
@@ -414,6 +385,21 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   std::vector<uint8_t> last_status_frame_;
   std::vector<uint8_t> last_tx_frame_;
 };
+
+template<typename... Ts> class ACHIIFeelAction : public Action<Ts...> {
+ public:
+  explicit ACHIIFeelAction(ACHIClimate *parent) : parent_(parent) {}
+  TEMPLATABLE_VALUE(float, temperature)
+  TEMPLATABLE_VALUE(bool, enabled)
+
+ protected:
+  void play(const Ts &...x) override {
+    this->parent_->send_ifeel(this->temperature_.value(x...), this->enabled_.value_or(x..., true));
+  }
+
+  ACHIClimate *parent_;
+};
+
 
 }  // namespace ac_hi
 }  // namespace esphome
