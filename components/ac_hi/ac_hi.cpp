@@ -674,6 +674,10 @@ void ACHIClimate::emit_kelon_ifeel_(Kelon168Data data, const char *kind, bool en
   const bool sent_ir = this->transmit_kelon_ir_(data);
   const bool published_mqtt = this->publish_kelon_mqtt_(data, kind, enabled, temperature);
 
+  if (sent_ir || published_mqtt) {
+    this->last_ifeel_command_ms_ = millis();
+  }
+
   if (!sent_ir && !published_mqtt) {
     ESP_LOGW(TAG, "iFeel Kelon168 command was formed but not sent: configure ir_transmitter_id and/or ifeel_mqtt_topic");
   }
@@ -686,9 +690,13 @@ void ACHIClimate::send_ifeel(float temperature, bool enabled) {
   if (!is_on) {
     this->ifeel_enabled_ = false;
     this->ifeel_temperature_ = 0;
+    this->ifeel_watchdog_retry_count_ = 0;
     ESP_LOGD(TAG, "Skipping iFeel IR command because AC is off");
     return;
   }
+
+  const bool old_enabled = this->ifeel_enabled_;
+  const uint8_t old_temperature = this->ifeel_temperature_;
 
   uint8_t temp_c = this->ifeel_temperature_;
   if (enabled) {
@@ -701,13 +709,19 @@ void ACHIClimate::send_ifeel(float temperature, bool enabled) {
     temp_c = static_cast<uint8_t>(rounded);
   }
 
-  const bool state_changed = this->ifeel_enabled_ != enabled;
+  const bool state_changed = old_enabled != enabled;
+  const bool temperature_changed = enabled && (old_temperature != temp_c);
   this->ifeel_enabled_ = enabled;
   this->ifeel_temperature_ = enabled ? temp_c : 0;
 
-  ESP_LOGD(TAG, "iFeel IR: enabled=%s temperature=%u°C state_changed=%s",
+  if (state_changed || temperature_changed) {
+    this->ifeel_watchdog_retry_count_ = 0;
+  }
+  this->last_ifeel_watchdog_ms_ = millis();
+
+  ESP_LOGD(TAG, "iFeel IR: enabled=%s temperature=%u°C state_changed=%s temperature_changed=%s",
            enabled ? "true" : "false", static_cast<unsigned>(this->ifeel_temperature_),
-           state_changed ? "true" : "false");
+           state_changed ? "true" : "false", temperature_changed ? "true" : "false");
 
   if (!enabled) {
     // Always send OFF when requested. After reboot we may not know whether the remote
@@ -726,6 +740,72 @@ void ACHIClimate::send_ifeel(float temperature, bool enabled) {
   // receives the current external temperature from HA/ESPHome.
   auto update = this->build_ifeel_state_(this->ifeel_temperature_, true, true);
   this->emit_kelon_ifeel_(update, "update", true, this->ifeel_temperature_);
+}
+
+void ACHIClimate::maybe_verify_ifeel_() {
+#ifndef USE_SENSOR
+  return;
+#else
+  if (this->ifeel_temperature_sensor_ == nullptr || !this->ifeel_enabled_)
+    return;
+  if (!this->power_on_)
+    return;
+  if (this->ifeel_watchdog_interval_ms_ == 0)
+    return;
+  if (!std::isfinite(this->current_temperature))
+    return;
+  if (!this->ifeel_temperature_sensor_->has_state())
+    return;
+
+  const uint32_t now = millis();
+  if (now - this->last_ifeel_watchdog_ms_ < this->ifeel_watchdog_interval_ms_)
+    return;
+  this->last_ifeel_watchdog_ms_ = now;
+
+  if (this->last_ifeel_command_ms_ != 0 &&
+      now - this->last_ifeel_command_ms_ < this->ifeel_watchdog_grace_period_ms_) {
+    ESP_LOGV(TAG, "iFeel watchdog: waiting for grace period after last iFeel command");
+    return;
+  }
+
+  const float external = this->ifeel_temperature_sensor_->state;
+  if (!std::isfinite(external)) {
+    ESP_LOGW(TAG, "iFeel watchdog skipped because external temperature sensor has invalid state");
+    return;
+  }
+
+  int rounded = static_cast<int>(std::lround(external));
+  rounded = std::max(0, std::min(50, rounded));
+  const uint8_t expected = static_cast<uint8_t>(rounded);
+  const float diff = std::fabs(this->current_temperature - static_cast<float>(expected));
+
+  if (diff <= this->ifeel_watchdog_tolerance_) {
+    if (this->ifeel_watchdog_retry_count_ != 0) {
+      ESP_LOGI(TAG, "iFeel watchdog: confirmed, AC current %.1f°C matches external %.1f°C rounded to %u°C",
+               this->current_temperature, external, static_cast<unsigned>(expected));
+    }
+    this->ifeel_watchdog_retry_count_ = 0;
+    return;
+  }
+
+  if (this->ifeel_watchdog_retry_count_ >= this->ifeel_watchdog_max_retries_) {
+    ESP_LOGW(TAG,
+             "iFeel watchdog: AC current %.1f°C still differs from external %.1f°C rounded to %u°C "
+             "by %.1f°C; max retries reached (%u), not retrying now",
+             this->current_temperature, external, static_cast<unsigned>(expected), diff,
+             static_cast<unsigned>(this->ifeel_watchdog_max_retries_));
+    return;
+  }
+
+  this->ifeel_watchdog_retry_count_++;
+  ESP_LOGW(TAG,
+           "iFeel watchdog: AC current %.1f°C differs from external %.1f°C rounded to %u°C "
+           "by %.1f°C, re-sending iFeel (%u/%u)",
+           this->current_temperature, external, static_cast<unsigned>(expected), diff,
+           static_cast<unsigned>(this->ifeel_watchdog_retry_count_),
+           static_cast<unsigned>(this->ifeel_watchdog_max_retries_));
+  this->send_ifeel(external, true);
+#endif
 }
 
 // ---- CRC calculation ----
@@ -995,6 +1075,10 @@ void ACHIClimate::parse_status_102_(const std::vector<uint8_t> &b) {
            (unsigned) target_c_, current_temperature,
            static_cast<int8_t>(b[IDX_OUTDOOR_TEMP]),
            b[IDX_COMP_FREQ], b[IDX_COMPRESSOR_EXHAUST_TEMP]);
+
+  // Optional iFeel feedback watchdog: after a fresh UART status frame, compare
+  // the AC-reported current temperature with the external iFeel sensor.
+  maybe_verify_ifeel_();
 
   // If HA has priority, check convergence and possibly enforce
   maybe_force_to_target_();

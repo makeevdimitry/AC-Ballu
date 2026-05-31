@@ -149,6 +149,15 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   }
   void set_ifeel_mqtt_qos(uint8_t qos) { ifeel_mqtt_qos_ = qos > 2 ? 0 : qos; }
   void set_ifeel_mqtt_retain(bool retain) { ifeel_mqtt_retain_ = retain; }
+#ifdef USE_SENSOR
+  void set_ifeel_temperature_sensor(sensor::Sensor *s) { ifeel_temperature_sensor_ = s; }
+#else
+  void set_ifeel_temperature_sensor(void *) {}
+#endif
+  void set_ifeel_watchdog_interval(uint32_t ms) { ifeel_watchdog_interval_ms_ = ms; }
+  void set_ifeel_watchdog_grace_period(uint32_t ms) { ifeel_watchdog_grace_period_ms_ = ms; }
+  void set_ifeel_watchdog_tolerance(float tolerance) { ifeel_watchdog_tolerance_ = tolerance; }
+  void set_ifeel_watchdog_max_retries(uint8_t retries) { ifeel_watchdog_max_retries_ = retries; }
 
   // Send/clear iFeel (Follow Me) over Kelon168 IR while UART climate remains the source of truth.
   void send_ifeel(float temperature, bool enabled);
@@ -207,6 +216,7 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   bool transmit_kelon_ir_(const Kelon168Data &data);
   bool publish_kelon_mqtt_(const Kelon168Data &data, const char *kind, bool enabled, uint8_t temperature);
   void emit_kelon_ifeel_(Kelon168Data data, const char *kind, bool enabled, uint8_t temperature);
+  void maybe_verify_ifeel_();
   std::string kelon168_to_hex_(const Kelon168Data &data) const;
   std::string kelon168_to_json_(const Kelon168Data &data, const char *kind, bool enabled, uint8_t temperature) const;
   void set_kelon_fan_(Kelon168Data *data, climate::ClimateFanMode fan_mode, bool turbo_fan) const;
@@ -285,6 +295,16 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   bool ifeel_mqtt_retain_{false};
   bool ifeel_enabled_{false};
   uint8_t ifeel_temperature_{0};
+#ifdef USE_SENSOR
+  sensor::Sensor *ifeel_temperature_sensor_{nullptr};
+#endif
+  uint32_t ifeel_watchdog_interval_ms_{60000};
+  uint32_t ifeel_watchdog_grace_period_ms_{30000};
+  float ifeel_watchdog_tolerance_{0.6f};
+  uint8_t ifeel_watchdog_max_retries_{3};
+  uint8_t ifeel_watchdog_retry_count_{0};
+  uint32_t last_ifeel_watchdog_ms_{0};
+  uint32_t last_ifeel_command_ms_{0};
 
   // Byte 36 in TX is an action-style display command, not a stable state field.
   // Keep it neutral for normal climate writes so repeated silent retries do not

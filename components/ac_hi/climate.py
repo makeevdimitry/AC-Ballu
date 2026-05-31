@@ -31,6 +31,11 @@ CONF_IFEEL_MQTT_TOPIC = "ifeel_mqtt_topic"
 CONF_IFEEL_MQTT_PAYLOAD = "ifeel_mqtt_payload"
 CONF_IFEEL_MQTT_QOS = "ifeel_mqtt_qos"
 CONF_IFEEL_MQTT_RETAIN = "ifeel_mqtt_retain"
+CONF_IFEEL_TEMPERATURE_SENSOR = "ifeel_temperature_sensor"
+CONF_IFEEL_WATCHDOG_INTERVAL = "ifeel_watchdog_interval"
+CONF_IFEEL_WATCHDOG_GRACE_PERIOD = "ifeel_watchdog_grace_period"
+CONF_IFEEL_WATCHDOG_TOLERANCE = "ifeel_watchdog_tolerance"
+CONF_IFEEL_WATCHDOG_MAX_RETRIES = "ifeel_watchdog_max_retries"
 CONF_ENABLED = "enabled"
 
 # Existing optional sensor keys
@@ -69,6 +74,11 @@ CONFIG_SCHEMA = BASE_CLIMATE_SCHEMA.extend({
     cv.Optional(CONF_IFEEL_MQTT_PAYLOAD, default="hex"): cv.one_of("hex", "json", lower=True),
     cv.Optional(CONF_IFEEL_MQTT_QOS, default=0): cv.one_of(0, 1, 2, int=True),
     cv.Optional(CONF_IFEEL_MQTT_RETAIN, default=False): cv.boolean,
+    cv.Optional(CONF_IFEEL_TEMPERATURE_SENSOR): cv.use_id(sensor.Sensor),
+    cv.Optional(CONF_IFEEL_WATCHDOG_INTERVAL, default="60s"): cv.positive_time_period_milliseconds,
+    cv.Optional(CONF_IFEEL_WATCHDOG_GRACE_PERIOD, default="30s"): cv.positive_time_period_milliseconds,
+    cv.Optional(CONF_IFEEL_WATCHDOG_TOLERANCE, default=0.6): cv.positive_float,
+    cv.Optional(CONF_IFEEL_WATCHDOG_MAX_RETRIES, default=3): cv.int_range(min=1, max=255),
 
     # Optional sensors (existing)
     cv.Optional(CONF_SET_TEMPERATURE): sensor.sensor_schema(),
@@ -136,6 +146,13 @@ async def to_code(config):
     cg.add(var.set_ifeel_mqtt_payload_format(config[CONF_IFEEL_MQTT_PAYLOAD]))
     cg.add(var.set_ifeel_mqtt_qos(config[CONF_IFEEL_MQTT_QOS]))
     cg.add(var.set_ifeel_mqtt_retain(config[CONF_IFEEL_MQTT_RETAIN]))
+    if sensor_id := config.get(CONF_IFEEL_TEMPERATURE_SENSOR):
+        sens = await cg.get_variable(sensor_id)
+        cg.add(var.set_ifeel_temperature_sensor(sens))
+    cg.add(var.set_ifeel_watchdog_interval(config[CONF_IFEEL_WATCHDOG_INTERVAL].total_milliseconds))
+    cg.add(var.set_ifeel_watchdog_grace_period(config[CONF_IFEEL_WATCHDOG_GRACE_PERIOD].total_milliseconds))
+    cg.add(var.set_ifeel_watchdog_tolerance(config[CONF_IFEEL_WATCHDOG_TOLERANCE]))
+    cg.add(var.set_ifeel_watchdog_max_retries(config[CONF_IFEEL_WATCHDOG_MAX_RETRIES]))
 
     # Optional numeric sensors (existing)
     if conf := config.get(CONF_SET_TEMPERATURE):
