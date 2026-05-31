@@ -718,8 +718,22 @@ void ACHIClimate::send_ifeel(float temperature, bool enabled) {
   }
 
   if (state_changed) {
-    auto on = this->build_ifeel_state_(this->ifeel_temperature_, true, false);
-    this->emit_kelon_ifeel_(on, "on", true, this->ifeel_temperature_);
+    // The dedicated iFeel ON/OFF command (0x0D) is acknowledged by this indoor
+    // unit with a beep and may also wake the front display. The temperature
+    // update frame (0x00) with FollowMe enabled is accepted by the unit as a
+    // silent FollowMe/iFeel update. Therefore, when the user has disabled
+    // command sound or wants the display to stay off, do not send the noisy
+    // 0x0D ON frame; send only the silent update below.
+    const bool allow_audible_ifeel_on = this->command_sound_enabled_ && this->d_led_;
+    if (allow_audible_ifeel_on) {
+      auto on = this->build_ifeel_state_(this->ifeel_temperature_, true, false);
+      this->emit_kelon_ifeel_(on, "on", true, this->ifeel_temperature_);
+    } else {
+      ESP_LOGI(TAG,
+               "Skipping audible/display iFeel ON frame; using silent update only "
+               "(command_sound=%s, led=%s)",
+               this->command_sound_enabled_ ? "ON" : "OFF", this->d_led_ ? "ON" : "OFF");
+    }
   }
 
   // While enabled, send an update frame every time the action is called so the AC
