@@ -10,7 +10,9 @@ This custom component provides full climate control for air conditioners manufac
 
 ❄️ **Newtek NT-77HSDC12**
 
-❄️ **Ballu iGreen Pro DC BSAGI-07HN8, BSAGI-12HN8**
+❄️ **Ballu iGreen Pro DC BSAGI-07HN8, BSAGI-12HN8**  
+
+❄️  **Ballu iGreen Pro DC BSAGI-18HN8_V4**
 
 and should work with many other models.
 
