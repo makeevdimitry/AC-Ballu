@@ -317,16 +317,18 @@ kelon168_mqtt_ir:
 
 ## Entities provided
 
-![prim2](https://github.com/user-attachments/assets/647b9e77-d2eb-46f5-b0de-94c4a47e6b8c)
+<img width="991" height="803" alt="image" src="https://github.com/user-attachments/assets/4980e7cc-d490-44fc-9df1-1b265cea544a" />
+
+<img width="1030" height="884" alt="image" src="https://github.com/user-attachments/assets/79785921-7fdf-4b84-a6b9-083c192837d0" />
 
 
 
 ### Climate (`climate`)
 
 -   Modes: `OFF`, `COOL`, `HEAT`, `DRY`, `FAN_ONLY` (auto mode is not supported by the AC)
--   Fan speeds: `AUTO`, `QUIET`, `LOW`, `MEDIUM`, `HIGH`
+-   Fan speeds: `AUTO`, `QUIET`, `LOW`, `MEDIUM`, `HIGH`, `TURBO`
 -   Swing modes: `OFF`, `VERTICAL`, `HORIZONTAL`, `BOTH`
--   Presets (if `enable_presets: true`): `ECO`, `BOOST` (turbo), `SLEEP`
+-   Presets (if `enable_presets: true`): `ECO`, `BOOST` (turbo), `SLEEP`, `QUIET`
 -   Target temperature range: 16–30°C in steps of 1°C
 -   Current temperature is read from the AC and displayed
 
@@ -351,11 +353,13 @@ Most sensors publish raw values received from the AC:
 | `swing_left_right` | Horizontal swing active (binary) |
 | `compressor_frequency_set` | Target compressor frequency (Hz) |
 | `compressor_frequency` | Actual compressor frequency (Hz) |
+| `compressor_exhaust_temperature` | Compressor Exhaust Temperature (°C) |
 | `power_status` | Text sensor showing "ON" or "OFF" |
 
 ### Switches (optional)
 
 -   `led_switch`: Controls the indoor unit’s LED backlight.
+-   `command_sound` : Command reception sound control.
 
 ## How it works
 
@@ -468,7 +472,7 @@ frame[frame.size() - 3] = crc & 0xFF;
 
 Issues and pull requests are welcome. Please ensure your code follows the ESPHome style and includes appropriate logging.
 
-## 3d case
+## 3D case
 
 JST-SM 2.54mm 4pin
 
