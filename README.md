@@ -6,24 +6,15 @@ This custom component provides full climate control for air conditioners manufac
 
 **Hisense CITY DC Inverter AS-13UW4RYRCM04G/04W** 
 
-**HISENSE AS-13UW4RVETG01**
+**Hisense SILVER CRYSTAL SUPER DC Inverter AS-13UW4RVETG01**
 
 **Newtek NT-77HSDC12**
 
-**Ballu iGreen Pro (BSAGI-07HN8), (BSAGI-12HN8)**
+**Ballu iGreen Pro DC BSAGI-07HN8, BSAGI-12HN8**
 
 and should work with many other models.
 
-The component exposes a standard Home Assistant Climate entity, along with a set of optional sensors and switches to access all advanced features of the AC (turbo, eco, quiet, sleep, swing, LED, etc.).
-
-## Acknowledgements
-
-We would like to thank the following people for their contributions to reverse engineering the protocol and developing this solution:
-
-- **vins.vins** ([4pda.to forum post](https://4pda.to/forum/index.php?showtopic=1076299&st=200#entry131868776)) – for initial protocol research and sharing findings.
-- **straga** ([GitHub](https://github.com/straga/scrivo_project/tree/master/project/ac_xm_hisense_control)) – for providing additional protocol details and wiring diagram.
-
-If you have contributed to the reverse engineering effort or improved the component, feel free to add your name here via a pull request!
+The component exposes a standard Home Assistant Climate entity, along with a set of optional sensors and switches to access all advanced features of the AC (turbo, eco, quiet, sleep, swing, LED, iFeel etc.).
 
 ## Hardware requirements
 
@@ -281,6 +272,17 @@ The component communicates with the AC via a simple request/response protocol ov
 -   **Convergence logic:** While HA has priority, the component continues to enforce the desired state until the AC confirms it (by sending a status frame that matches the desired signature). After convergence, remote changes (e.g., from the IR remote) are again accepted and reflected in HA.
 -   **CRC validation:** All incoming frames are checked for CRC correctness; invalid frames are discarded.
 -   **Write lock timeout:** If the AC does not acknowledge a write within 5 seconds, the lock is released to avoid permanent blocking.
+
+## Acknowledgements
+
+We would like to thank the following people for their contributions to reverse engineering the protocol and developing this solution:
+
+- **vins.vins** ([4pda.to forum post](https://4pda.to/forum/index.php?showtopic=1076299&st=200#entry131868776)) – for initial protocol research and sharing findings.
+- **straga** ([GitHub](https://github.com/straga/scrivo_project/tree/master/project/ac_xm_hisense_control)) – for providing additional protocol details and wiring diagram.
+- **artshevchenko** ([GitHub](https://github.com/artshevchenko/AC-Hi)) - the source component for ESPHome.
+- **adipierro** ([GitHub](https://github.com/adipierro/esphome-hisense-kelon-ir) - IR component for AC hisense control.
+
+If you have contributed to the reverse engineering effort or improved the component, feel free to add your name here via a pull request!
 
 ## Protocol specification (reverse engineered)
 
