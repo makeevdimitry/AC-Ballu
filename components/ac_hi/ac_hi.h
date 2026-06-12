@@ -52,6 +52,16 @@ class ACHICommandSoundSwitch : public switch_::Switch {
   ACHIClimate *parent_{nullptr};
 };
 
+// Simple switch that enables/disables restoring the last active mode on generic power-on.
+class ACHIMemorySwitch : public switch_::Switch {
+ public:
+  void set_parent(ACHIClimate *p) { parent_ = p; }
+ protected:
+  void write_state(bool state) override;
+ private:
+  ACHIClimate *parent_{nullptr};
+};
+
 // Protocol constants
 static constexpr uint8_t HI_HDR0 = 0xF4;
 static constexpr uint8_t HI_HDR1 = 0xF5;
@@ -142,6 +152,7 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
 #endif
   void set_led_switch(ACHILEDTargetSwitch *s) { led_switch_ = s; if (led_switch_) led_switch_->set_parent(this); }
   void set_sound_switch(ACHICommandSoundSwitch *s) { sound_switch_ = s; if (sound_switch_) sound_switch_->set_parent(this); }
+  void set_memory_switch(ACHIMemorySwitch *s) { memory_switch_ = s; if (memory_switch_) memory_switch_->set_parent(this); }
   void set_ir_transmitter(remote_base::RemoteTransmitterBase *t) { ir_transmitter_ = t; }
   void set_ifeel_mqtt_topic(const std::string &topic) { ifeel_mqtt_topic_ = topic; }
   void set_ifeel_mqtt_payload_format(const std::string &format) {
@@ -192,9 +203,10 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   void control(const climate::ClimateCall &call) override;
   climate::ClimateTraits traits() override;
 
-  // Called by LED and sound switches
+  // Called by LED, sound and memory switches
   void set_desired_led(bool on);
   void set_command_sound_enabled(bool on);
+  void set_memory_mode_enabled(bool on);
 
  protected:
   // Protocol I/O
@@ -226,6 +238,7 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   void publish_gated_state_();
   void update_led_switch_state_();
   void update_sound_switch_state_();
+  void update_memory_switch_state_();
   void publish_fan_state_(bool turbo_fan, climate::ClimateFanMode fan);
   void maybe_force_to_target_();                     // <-- добавлено объявление
   void maybe_send_pending_control_();                // (опционально, если используется)
@@ -276,6 +289,10 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
 
   // User-configurable local mute for command confirmation beeps.
   bool command_sound_enabled_{true};
+
+  // When enabled, a generic climate.turn_on restores the last active HVAC mode
+  // instead of accepting Home Assistant's first-supported-mode fallback.
+  bool memory_mode_enabled_{false};
 
   // Optional Kelon168 IR/MQTT output for iFeel / Follow Me commands.
   remote_base::RemoteTransmitterBase *ir_transmitter_{nullptr};
@@ -399,6 +416,7 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
 
   ACHILEDTargetSwitch *led_switch_{nullptr};
   ACHICommandSoundSwitch *sound_switch_{nullptr};
+  ACHIMemorySwitch *memory_switch_{nullptr};
 
   bool enable_presets_{true};
 

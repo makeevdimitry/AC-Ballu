@@ -75,6 +75,15 @@ void ACHICommandSoundSwitch::write_state(bool state) {
   }
 }
 
+// ---- ACHIMemorySwitch ----
+void ACHIMemorySwitch::write_state(bool state) {
+  if (parent_ != nullptr) {
+    parent_->set_memory_mode_enabled(state);
+  } else {
+    publish_state(state);
+  }
+}
+
 // ---- ACHIClimate implementation ----
 
 void ACHIClimate::setup() {
@@ -119,6 +128,7 @@ void ACHIClimate::setup() {
   publish_state();
   update_led_switch_state_();
   update_sound_switch_state_();
+  update_memory_switch_state_();
 
   // Pre‑reserve buffers to avoid reallocations
   rx_.reserve(RX_BUFFER_RESERVE);
@@ -214,32 +224,42 @@ void ACHIClimate::control(const climate::ClimateCall &call) {
   if (call.get_mode().has_value()) {
     auto m = *call.get_mode();
     if (m == climate::CLIMATE_MODE_OFF) {
-      // Remember the last real working mode before OFF. Do not let OFF erase it.
-      if (d_power_on_ && d_mode_ != climate::CLIMATE_MODE_OFF) {
-        last_active_mode_ = d_mode_;
-      } else if (power_on_ && mode_ != climate::CLIMATE_MODE_OFF) {
-        last_active_mode_ = mode_;
+      if (memory_mode_enabled_) {
+        // Remember the last real working mode before OFF. Do not let OFF erase it.
+        if (d_power_on_ && d_mode_ != climate::CLIMATE_MODE_OFF) {
+          last_active_mode_ = d_mode_;
+        } else if (power_on_ && mode_ != climate::CLIMATE_MODE_OFF) {
+          last_active_mode_ = mode_;
+        }
       }
 
       d_power_on_ = false;
-      // Keep the last real mode in the desired state while power is OFF.
-      // The published HA mode remains OFF, but the next generic climate.turn_on
-      // can restore the real previous mode instead of Home Assistant's fallback.
-      d_mode_ = last_active_mode_;
+      if (memory_mode_enabled_) {
+        // Keep the last real mode in the desired state while power is OFF.
+        // The published HA mode remains OFF, but the next generic climate.turn_on
+        // can restore the real previous mode instead of Home Assistant's fallback.
+        d_mode_ = last_active_mode_;
+      } else {
+        // Original behavior: OFF falls back to COOL and the next turn_on accepts
+        // whatever mode Home Assistant sends.
+        d_mode_ = climate::CLIMATE_MODE_COOL;
+      }
     } else {
       d_power_on_ = true;
 
       auto requested_mode = m;
-      if (!was_power_on && last_active_mode_ != climate::CLIMATE_MODE_OFF &&
+      if (memory_mode_enabled_ && !was_power_on && last_active_mode_ != climate::CLIMATE_MODE_OFF &&
           requested_mode != last_active_mode_) {
-        ESP_LOGD(TAG, "Power-on mode %s replaced by last active mode %s",
+        ESP_LOGD(TAG, "Power-on mode %s replaced by last active mode %s because Memory is ON",
                  climate::climate_mode_to_string(requested_mode),
                  climate::climate_mode_to_string(last_active_mode_));
         requested_mode = last_active_mode_;
       }
 
       d_mode_ = requested_mode;
-      last_active_mode_ = d_mode_;
+      if (memory_mode_enabled_) {
+        last_active_mode_ = d_mode_;
+      }
       if (!was_power_on) {
         // Match remote behavior: powering on restores the front display LED,
         // but send the display command only if we are actually changing it.
@@ -1110,7 +1130,7 @@ void ACHIClimate::publish_gated_state_() {
       }
     }
 
-    if (power_on_ && mode_ != climate::CLIMATE_MODE_OFF) {
+    if (memory_mode_enabled_ && power_on_ && mode_ != climate::CLIMATE_MODE_OFF) {
       last_active_mode_ = mode_;
     }
 
@@ -1174,6 +1194,11 @@ void ACHIClimate::update_led_switch_state_() {
 void ACHIClimate::update_sound_switch_state_() {
   if (sound_switch_ == nullptr) return;
   sound_switch_->publish_state(command_sound_enabled_);
+}
+
+void ACHIClimate::update_memory_switch_state_() {
+  if (memory_switch_ == nullptr) return;
+  memory_switch_->publish_state(memory_mode_enabled_);
 }
 
 void ACHIClimate::maybe_force_to_target_() {
@@ -1342,6 +1367,27 @@ void ACHIClimate::set_desired_led(bool on) {
 }
 
 // ---- External command sound control ----
+void ACHIClimate::set_memory_mode_enabled(bool on) {
+  memory_mode_enabled_ = on;
+
+  if (memory_mode_enabled_) {
+    // If Memory is enabled while the unit is already running, seed the memory
+    // immediately from the real/published working mode.
+    if (d_power_on_ && d_mode_ != climate::CLIMATE_MODE_OFF) {
+      last_active_mode_ = d_mode_;
+    } else if (power_on_ && mode_ != climate::CLIMATE_MODE_OFF) {
+      last_active_mode_ = mode_;
+    }
+  } else if (!d_power_on_) {
+    // With Memory OFF, keep the previous/original OFF fallback behavior.
+    d_mode_ = climate::CLIMATE_MODE_COOL;
+    recalc_desired_sig_();
+  }
+
+  update_memory_switch_state_();
+  ESP_LOGD(TAG, "Memory switch: %s", memory_mode_enabled_ ? "ON" : "OFF");
+}
+
 void ACHIClimate::set_command_sound_enabled(bool on) {
   if (!on && !d_led_) {
     // The display is currently desired OFF. In this state user commands need
