@@ -95,6 +95,7 @@ void ACHIClimate::setup() {
   // Desired state mirrors initial
   d_power_on_     = false;
   d_mode_         = climate::CLIMATE_MODE_OFF;
+  last_active_mode_ = climate::CLIMATE_MODE_COOL;
   d_target_c_     = 24;
   d_fan_          = climate::CLIMATE_FAN_AUTO;
   d_fan_turbo_    = false;
@@ -213,11 +214,32 @@ void ACHIClimate::control(const climate::ClimateCall &call) {
   if (call.get_mode().has_value()) {
     auto m = *call.get_mode();
     if (m == climate::CLIMATE_MODE_OFF) {
+      // Remember the last real working mode before OFF. Do not let OFF erase it.
+      if (d_power_on_ && d_mode_ != climate::CLIMATE_MODE_OFF) {
+        last_active_mode_ = d_mode_;
+      } else if (power_on_ && mode_ != climate::CLIMATE_MODE_OFF) {
+        last_active_mode_ = mode_;
+      }
+
       d_power_on_ = false;
-      d_mode_ = climate::CLIMATE_MODE_COOL;   // fallback, power off overrides
+      // Keep the last real mode in the desired state while power is OFF.
+      // The published HA mode remains OFF, but the next generic climate.turn_on
+      // can restore the real previous mode instead of Home Assistant's fallback.
+      d_mode_ = last_active_mode_;
     } else {
       d_power_on_ = true;
-      d_mode_ = m;
+
+      auto requested_mode = m;
+      if (!was_power_on && last_active_mode_ != climate::CLIMATE_MODE_OFF &&
+          requested_mode != last_active_mode_) {
+        ESP_LOGD(TAG, "Power-on mode %s replaced by last active mode %s",
+                 climate::climate_mode_to_string(requested_mode),
+                 climate::climate_mode_to_string(last_active_mode_));
+        requested_mode = last_active_mode_;
+      }
+
+      d_mode_ = requested_mode;
+      last_active_mode_ = d_mode_;
       if (!was_power_on) {
         // Match remote behavior: powering on restores the front display LED,
         // but send the display command only if we are actually changing it.
@@ -1086,6 +1108,10 @@ void ACHIClimate::publish_gated_state_() {
         out_fan = d_fan_;
         out_fan_turbo = true;
       }
+    }
+
+    if (power_on_ && mode_ != climate::CLIMATE_MODE_OFF) {
+      last_active_mode_ = mode_;
     }
 
     this->mode = power_on_ ? mode_ : climate::CLIMATE_MODE_OFF;

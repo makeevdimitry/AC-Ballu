@@ -343,6 +343,7 @@ class ACHIClimate : public climate::Climate, public PollingComponent, public uar
   bool d_power_on_{false};
   uint8_t d_target_c_{24};
   climate::ClimateMode d_mode_{climate::CLIMATE_MODE_OFF};
+  climate::ClimateMode last_active_mode_{climate::CLIMATE_MODE_COOL};
   climate::ClimateFanMode d_fan_{climate::CLIMATE_FAN_AUTO};
   bool d_fan_turbo_{false};
   climate::ClimateSwingMode d_swing_{climate::CLIMATE_SWING_OFF};
