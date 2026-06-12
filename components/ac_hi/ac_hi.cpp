@@ -900,6 +900,7 @@ void ACHIClimate::parse_status_102_(const std::vector<uint8_t> &b) {
   // Ensure we have all expected bytes
   if (b.size() < 49) {
     ESP_LOGE(TAG, "Status frame too short (%u), cannot parse fully", (unsigned) b.size());
+    ESP_LOG_BUFFER_HEX_LEVEL(TAG, b.data(), b.size(), ESP_LOG_ERROR);
     return;
   }
 
